@@ -71,11 +71,45 @@
     const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;height:auto" role="img" aria-label="Premarket price line">` +
       (m.prev ? `<line x1="${L}" x2="${W - R}" y1="${Y(m.prev).toFixed(1)}" y2="${Y(m.prev).toFixed(1)}" stroke="currentColor" opacity=".35" stroke-dasharray="3 3"/>` : "") +
       marks.map(([mn, c]) => `<line x1="${X(mn).toFixed(1)}" x2="${X(mn).toFixed(1)}" y1="${Tp}" y2="${H - B}" stroke="${c}" stroke-width="2" opacity=".8"/>`).join("") +
-      `<polyline points="${poly}" fill="none" stroke="#1f7a4d" stroke-width="1.8"/>` + hours + `</svg>`;
-    const box = h("div", {});
+      `<rect class="pl-band" y="${Tp}" height="${H - Tp - B}" fill="currentColor" opacity=".07" style="display:none"/>` +
+      `<polyline points="${poly}" fill="none" stroke="#1f7a4d" stroke-width="1.8"/>` + hours +
+      `<line class="pl-cur" y1="${Tp}" y2="${H - B}" stroke="currentColor" opacity=".6" style="display:none"/><circle class="pl-dot" r="3" fill="#1f7a4d" style="display:none"/></svg>`;
+    const box = h("div", { class: "pl" });
     box.innerHTML = svg;
-    box.append(h("div", { class: "sub", style: "margin:0", text: "Price every 5 minutes, 1:00 to 6:30 AM Seattle on " + dayLabel(day) + " (" + px(lo) + " to " + px(hi) + "). Dashed line: previous close of " + px(m.prev) + ". Blue marks: a headline about the stock came out; orange marks: an SEC filing was accepted." }));
+    hoverPrices(box, m, X, W, L, R);
+    box.append(h("div", { class: "sub", style: "margin:0", text: "Price every 5 minutes, 1:00 to 6:30 AM Seattle on " + dayLabel(day) + " (" + px(lo) + " to " + px(hi) + "). Hover or touch the chart for the price at that moment and the hour's open, close, low and high. Dashed line: previous close of " + px(m.prev) + ". Blue marks: a headline about the stock came out; orange marks: an SEC filing was accepted." }));
     return box;
+  }
+  /* Hover or touch the chart: the price at that moment, and the open, close, low and high of that clock hour. */
+  const hourName = mn => clock(mn).replace(":00", "");
+  function hoverPrices(box, m, X, W, L, R) {
+    const svg = box.querySelector("svg"), band = svg.querySelector(".pl-band"), cur = svg.querySelector(".pl-cur"), dot = svg.querySelector(".pl-dot");
+    const tip = h("div", { class: "pl-tip" });
+    tip.hidden = true;
+    box.append(tip);
+    svg.style.cursor = "crosshair";
+    const hide = () => { tip.hidden = true; band.style.display = cur.style.display = dot.style.display = "none"; };
+    const show = ev => {
+      const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W, mn = T0 + (vx - L) / (W - L - R) * (T1 - T0);
+      if (mn < T0 || mn > T1) return hide();
+      let pt = m.series[0];
+      for (const x of m.series) { if (x[0] <= mn) pt = x; else break; }
+      const a = Math.min(300 + 60, Math.floor(pt[0] / 60) * 60), b = a === 360 ? T1 : a + 60;
+      const inHour = m.series.filter(x => x[0] >= a && x[0] < (a === 360 ? T1 + 1 : a + 60)), prices = inHour.map(x => x[1]);
+      const chg = m.prev ? pct(pt[1] / m.prev - 1, 1) + " vs previous close" : "";
+      band.setAttribute("x", X(a)); band.setAttribute("width", X(b) - X(a)); band.style.display = "";
+      cur.setAttribute("x1", X(pt[0])); cur.setAttribute("x2", X(pt[0])); cur.style.display = "";
+      dot.setAttribute("cx", X(pt[0])); dot.setAttribute("cy", svg.querySelector("polyline").points.getItem(m.series.indexOf(pt)).y); dot.style.display = "";
+      tip.replaceChildren(h("div", { style: "font-weight:650", text: hourName(a) + " – " + (a === 360 ? "6:30 AM" : hourName(b)) }),
+        h("div", { text: "At " + clock(pt[0]) + ": " + px(pt[1]) + (chg ? " (" + chg + ")" : "") }),
+        inHour.length ? h("div", { class: "sub", style: "margin:0", text: "This hour: " + px(inHour[0][1]) + " → " + px(inHour[inHour.length - 1][1]) + " · low " + px(Math.min(...prices)) + " · high " + px(Math.max(...prices)) }) : h("div", { class: "sub", style: "margin:0", text: "No trades this hour" }));
+      tip.hidden = false;
+      const br = box.getBoundingClientRect(), x = ev.clientX - br.left;
+      tip.style.left = (x > br.width / 2 ? Math.max(0, x - tip.offsetWidth - 14) : x + 14) + "px";
+    };
+    svg.addEventListener("pointermove", show);
+    svg.addEventListener("pointerdown", show);
+    svg.addEventListener("pointerleave", hide);
   }
   function detailOf(m, day, kind) {
     const parts = [], fact = (label, text) => h("li", {}, h("b", { text: label + " " }), text);
@@ -154,6 +188,9 @@
   .lv-bar.on .lv-dot{background:var(--up);animation:lvpulse 1.6s infinite}
   @keyframes lvpulse{50%{opacity:.35}}
   .lv-bar button{font:inherit;font-size:12.5px;border:1px solid var(--border);background:var(--wash);color:var(--ink);padding:3px 11px;border-radius:8px;cursor:pointer;margin-left:auto}
+  .pl{position:relative}
+  .pl-tip{position:absolute;top:0;z-index:4;pointer-events:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;line-height:1.4;box-shadow:0 4px 14px rgba(0,0,0,.18);white-space:nowrap}
+  .pl-tip[hidden]{display:none}
   .ld-list{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--page)}
   .ld-row{display:grid;grid-template-columns:minmax(150px,1.3fr) 110px minmax(120px,1fr) 110px;gap:10px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--grid)}
   .ld-row:last-child{border-bottom:0}

@@ -111,6 +111,92 @@
     svg.addEventListener("pointerdown", show);
     svg.addEventListener("pointerleave", hide);
   }
+  /* ----- "Before this morning:" opens a panel: the last 60 sessions with volume, the numbers behind them, and where to read more ----- */
+  const shortDay = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const symFor = (m, sep) => m.s.replace(/[.\-]/g, sep);
+  function beforeFact(m) {
+    const text = "closed " + px(m.prev != null ? m.prev : m.close) + " on " + dayLabel(m.prevDay) + (m.prevVol != null ? " on " + big(m.prevVol) + " shares" + (m.avgVol ? " (usual " + big(m.avgVol) + ")" : "") : "");
+    const btn = h("button", { type: "button", class: "bm-btn", "aria-expanded": "false", title: "Open the last 60 sessions, the numbers behind them, and places to read more" },
+      h("span", { class: "bm-chev", text: "▸" }), h("b", { text: " Before this morning: " }), text, h("span", { class: "bm-hint", text: "click to dig deeper" }));
+    const li = h("li", { class: "bm" }, btn);
+    let panel = null;
+    btn.addEventListener("click", ev => {
+      ev.stopPropagation();
+      if (!panel) { panel = beforePanel(m); li.append(panel); } else panel.hidden = !panel.hidden;
+      btn.setAttribute("aria-expanded", String(!panel.hidden));
+      btn.querySelector(".bm-chev").textContent = panel.hidden ? "▸" : "▾";
+    });
+    return li;
+  }
+  function beforePanel(m) {
+    const H0 = S.hist && S.hist.s && S.hist.s[m.s], k = H0 ? H0.d.filter(d => d <= m.prevDay).length : 0;
+    const H = k >= 5 ? { d: H0.d.slice(0, k), c: H0.c.slice(0, k), h: H0.h.slice(0, k), l: H0.l.slice(0, k), v: H0.v.slice(0, k) } : null;
+    const kv = (label, v, note) => h("div", {}, h("div", { class: "k", text: label }), h("div", { class: "v" }, v), note ? h("div", { class: "sub", style: "margin:0", text: note }) : null);
+    const times = (v, avg) => (avg ? (v / avg >= 10 ? fmt(Math.round(v / avg)) : (v / avg).toFixed(1)) + "× usual" : "");
+    const cells = [], panel = h("div", { class: "bm-panel" });
+    if (H) {
+      const n = H.d.length, last = n - 1, prevC = H.c[last - 1], dayChg = prevC ? H.c[last] / prevC - 1 : null;
+      panel.append(h("div", { class: "sub", style: "margin:0 0 4px", text: "The last " + n + " sessions up to " + dayLabel(m.prevDay) + ": price line on top, shares traded below (green bars: the price closed up that day, red: down). Hover or touch for any day." }), bmChart(H, m));
+      const hiI = H.c.indexOf(Math.max(...H.c)), loI = H.c.indexOf(Math.min(...H.c)), vI = H.v.indexOf(Math.max(...H.v));
+      cells.push(kv("Yesterday (" + shortDay(H.d[last]) + ")", px(H.c[last]) + (dayChg == null ? "" : " " + (dayChg > 0 ? "▲ " : dayChg < 0 ? "▼ " : "") + pct(dayChg, 1)), "range " + px(H.l[last]) + " to " + px(H.h[last]) + " · " + big(H.v[last]) + " shares" + (m.avgVol ? " (" + times(H.v[last], m.avgVol) + ")" : "")));
+      cells.push(kv(n + "-session closing high", px(H.c[hiI]), shortDay(H.d[hiI]) + (hiI === last ? " (yesterday)" : "") + " · yesterday's close is " + pct(H.c[last] / H.c[hiI] - 1, 0) + " from it"));
+      cells.push(kv(n + "-session closing low", px(H.c[loI]), shortDay(H.d[loI]) + (loI === last ? " (yesterday)" : "") + " · yesterday's close is " + pct(H.c[last] / H.c[loI] - 1, 0) + " from it"));
+      cells.push(kv("Busiest day of the " + n, big(H.v[vI]) + " shares", shortDay(H.d[vI]) + (m.avgVol ? " · " + times(H.v[vI], m.avgVol) : "") + (vI > 0 && H.c[vI - 1] ? " · price " + pct(H.c[vI] / H.c[vI - 1] - 1, 0) + " that day" : "")));
+    } else panel.append(h("div", { class: "sub", style: "margin:0 0 6px", text: "The daily price history for this stock was not saved with this scan. The numbers and links below still work." }));
+    if (m.hi52 != null && m.lo52 != null) {
+      const at = m.hi52 > m.lo52 ? ((m.prev != null ? m.prev : m.close) - m.lo52) / (m.hi52 - m.lo52) : null;
+      cells.push(kv("52-week range", px(m.lo52) + " to " + px(m.hi52), (at == null ? "" : "yesterday's close sat " + Math.round(Math.min(Math.max(at, 0), 1) * 100) + "% of the way up · ") + "low " + (m.lo52Day ? shortDay(m.lo52Day) : "–") + ", high " + (m.hi52Day ? shortDay(m.hi52Day) : "–")));
+    }
+    if (m.avgVol) cells.push(kv("A usual day", big(m.avgVol) + " shares", "the average of the 20 sessions before yesterday"));
+    if (cells.length) panel.append(h("div", { class: "mv-dl bm-grid" }, cells));
+    const y = symFor(m, "-"), L = (href, t, why) => h("li", {}, link(href, t + " ↗"), h("span", { class: "sub", style: "margin:0", text: " " + why }));
+    panel.append(h("div", { style: "margin-top:10px" }, h("b", { text: "Dig deeper: " }), h("span", { class: "sub", style: "margin:0", text: "these open other websites in a new tab" }),
+      h("ul", { class: "bm-links" },
+        L("https://finance.yahoo.com/quote/" + encodeURIComponent(y), "Yahoo Finance", "price, company profile, numbers about the business"),
+        L("https://finance.yahoo.com/quote/" + encodeURIComponent(y) + "/key-statistics", "Key statistics", "how many shares exist, shares sold short, valuation"),
+        L("https://finviz.com/quote.ashx?t=" + encodeURIComponent(y), "Finviz", "one page of ratios, short interest, insider trades and news"),
+        L("https://www.tradingview.com/symbols/" + encodeURIComponent(symFor(m, "-")) + "/", "TradingView", "bigger charts, with any time span you pick"),
+        m.cik ? L("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=" + m.cik + "&owner=include&count=40", "Every SEC filing", "the company's own reports, including share offerings and insider trades") : null,
+        L("https://www.google.com/search?tbm=nws&q=" + encodeURIComponent(m.s + " stock"), "News search", "what is being written about it right now"))));
+    return panel;
+  }
+  function bmChart(H, m) {
+    const n = H.d.length, W = 600, Ht = 176, L = 36, R = 8, Tp = 8, VH = 44, axis = 16, top = Ht - axis - VH - 8;
+    const lo = Math.min(...H.l), hi = Math.max(...H.h), span = hi - lo || 1, vmax = Math.max(...H.v) || 1;
+    const X = i => L + i / Math.max(n - 1, 1) * (W - L - R), Y = v => Tp + (1 - (v - lo) / span) * (top - Tp), bw = Math.max((W - L - R) / n * 0.7, 1.5);
+    const line = H.c.map((v, i) => X(i).toFixed(1) + "," + Y(v).toFixed(1)).join(" ");
+    const vol = H.v.map((v, i) => { const hh = Math.max(v / vmax * VH, v ? 1 : 0), up = i === 0 || H.c[i] >= H.c[i - 1];
+      return `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${(Ht - axis - hh).toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" fill="${up ? "#1f7a4d" : "#c0392b"}" opacity=".55"/>`; }).join("");
+    const tick = (i, anchor) => `<text x="${X(i).toFixed(1)}" y="${Ht - 3}" font-size="9" fill="currentColor" opacity=".55" text-anchor="${anchor}">${shortDay(H.d[i])}</text>`;
+    const mid = Math.floor((n - 1) / 2);
+    const svgText = `<svg viewBox="0 0 ${W} ${Ht}" width="100%" style="max-width:${W}px;height:auto;cursor:crosshair" role="img" aria-label="Closing price and volume, last ${n} sessions">` +
+      `<text x="${L - 4}" y="${Tp + 8}" font-size="9" fill="currentColor" opacity=".6" text-anchor="end">${px(hi)}</text><text x="${L - 4}" y="${top}" font-size="9" fill="currentColor" opacity=".6" text-anchor="end">${px(lo)}</text>` +
+      `<line x1="${L}" x2="${W - R}" y1="${top + 4}" y2="${top + 4}" stroke="currentColor" opacity=".15"/>` +
+      `<rect class="bm-band" y="${Tp}" height="${Ht - axis - Tp}" fill="currentColor" opacity=".07" style="display:none"/>` + vol +
+      `<polyline points="${line}" fill="none" stroke="#1f7a4d" stroke-width="1.8"/><circle cx="${X(n - 1).toFixed(1)}" cy="${Y(H.c[n - 1]).toFixed(1)}" r="3" fill="#1f7a4d"/>` +
+      tick(0, "start") + tick(mid, "middle") + tick(n - 1, "end") + `<circle class="bm-dot" r="3.5" fill="#1f7a4d" style="display:none"/></svg>`;
+    const box = h("div", { class: "pl" });
+    box.innerHTML = svgText;
+    const svg = box.querySelector("svg"), band = svg.querySelector(".bm-band"), dot = svg.querySelector(".bm-dot"), tip = h("div", { class: "pl-tip" });
+    tip.hidden = true;
+    box.append(tip);
+    const hide = () => { tip.hidden = true; band.style.display = dot.style.display = "none"; };
+    const show = ev => {
+      const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W;
+      if (vx < L - 4 || vx > W - R + 4) return hide();
+      const i = Math.min(Math.max(Math.round((vx - L) / (W - L - R) * (n - 1)), 0), n - 1), chg = i > 0 && H.c[i - 1] ? H.c[i] / H.c[i - 1] - 1 : null;
+      band.setAttribute("x", X(i) - bw); band.setAttribute("width", bw * 2); band.style.display = "";
+      dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(H.c[i])); dot.style.display = "";
+      tip.replaceChildren(h("div", { style: "font-weight:650", text: dayLabel(H.d[i]) }),
+        h("div", { text: "Close " + px(H.c[i]) + (chg == null ? "" : " (" + pct(chg, 1) + " on the day)") }),
+        h("div", { class: "sub", style: "margin:0", text: "Range " + px(H.l[i]) + " to " + px(H.h[i]) + " · " + big(H.v[i]) + " shares" + (m.avgVol ? " (" + (H.v[i] / m.avgVol >= 10 ? fmt(Math.round(H.v[i] / m.avgVol)) : (H.v[i] / m.avgVol).toFixed(1)) + "× usual)" : "") }));
+      tip.hidden = false;
+      const br = box.getBoundingClientRect(), x = ev.clientX - br.left;
+      tip.style.left = (x > br.width / 2 ? Math.max(0, x - tip.offsetWidth - 14) : x + 14) + "px";
+    };
+    svg.addEventListener("pointermove", show); svg.addEventListener("pointerdown", show); svg.addEventListener("pointerleave", hide);
+    return box;
+  }
   function detailOf(m, day, kind) {
     const parts = [], fact = (label, text) => h("li", {}, h("b", { text: label + " " }), text);
     const pb = kind ? plainBox(m, day, kind) : null;
@@ -120,7 +206,7 @@
     if (line) parts.push(line);
     const facts = [];
     if (m.firstAt != null) facts.push(fact("First trade before the open:", dayAt(day, m.firstAt) + (m.openPct != null ? ", " + pct(m.openPct) + " from the previous close" : "") + (m.cross10 != null ? ". First minute closing 10% over the previous close: " + dayAt(day, m.cross10) : "")));
-    if (m.prevDay) facts.push(fact("Before this morning:", "closed " + px(m.prev != null ? m.prev : m.close) + " on " + dayLabel(m.prevDay || m.closeDay) + (m.prevVol != null ? " on " + big(m.prevVol) + " shares" + (m.avgVol ? " (usual " + big(m.avgVol) + ")" : "") : "")));
+    if (m.prevDay) facts.push(beforeFact(m));
     if (m.closeDay && !m.prevDay) facts.push(fact("Last close:", px(m.close) + " on " + dayLabel(m.closeDay) + " on " + big(m.vol) + " shares" + (m.avgVol ? " (usual " + big(m.avgVol) + ")" : "")));
     if (m.ret5 != null || m.ret20 != null) facts.push(fact("Run-up before the scan:", [m.ret5 != null ? pct(m.ret5, 1) + " over the last 5 sessions" : null, m.ret20 != null ? pct(m.ret20, 1) + " over the last 20" : null].filter(Boolean).join(", ") + " (to the close of " + dayLabel(m.prevDay || m.closeDay) + ")"));
     if (m.hi52 != null) facts.push(fact("52-week range:", "high " + px(m.hi52) + " on " + dayLabel(m.hi52Day) + ", low " + px(m.lo52) + " on " + dayLabel(m.lo52Day) + " (before the previous session)"));
@@ -188,6 +274,12 @@
   .lv-bar.on .lv-dot{background:var(--up);animation:lvpulse 1.6s infinite}
   @keyframes lvpulse{50%{opacity:.35}}
   .lv-bar button{font:inherit;font-size:12.5px;border:1px solid var(--border);background:var(--wash);color:var(--ink);padding:3px 11px;border-radius:8px;cursor:pointer;margin-left:auto}
+  .bm-btn{font:inherit;color:inherit;text-align:left;background:none;border:0;padding:0;cursor:pointer;line-height:inherit}
+  .bm-btn:hover b,.bm-btn:focus-visible b{text-decoration:underline}
+  .bm-chev{display:inline-block;width:1.1em;color:var(--s1);font-size:13px} .bm-hint{color:var(--s1);font-size:12px;font-weight:650;background:var(--wash);border-radius:999px;padding:1px 9px;margin-left:4px;white-space:nowrap}
+  .bm-panel{margin:8px 0 10px -18px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+  .bm-grid{margin-top:10px} .bm-links{margin:4px 0 0;padding-left:18px} .bm-links li{margin:2px 0}
+  li.bm{list-style:none;margin-left:-18px}
   .pl{position:relative}
   .pl-tip{position:absolute;top:0;z-index:4;pointer-events:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;line-height:1.4;box-shadow:0 4px 14px rgba(0,0,0,.18);white-space:nowrap}
   .pl-tip[hidden]{display:none}
@@ -536,6 +628,7 @@
       if (!r.ok) throw new Error("missing");
       S.data = await r.json();
       try { const q = await fetch("daily-scan-replay.json?t=" + Date.now(), { cache: "no-store" }); S.replay = q.ok ? await q.json() : null; } catch (err) { S.replay = null; }
+      try { const q = await fetch("daily-history.json?t=" + Date.now(), { cache: "no-store" }); S.hist = q.ok ? await q.json() : null; } catch (err) { S.hist = null; }
       draw();
     } catch (err) {
       $("#sc-lede").textContent = "No scan yet. Run  /usr/bin/python3 -I tools/daily_scan.py  in the dashboard folder (it also runs by itself at 6:00 AM Seattle time on weekdays).";

@@ -114,7 +114,9 @@
     const f = m.filings[0];
     return two(m.filings.length + " filing" + (m.filings.length === 1 ? "" : "s") + (m.filings.some(x => x.offering) ? " (offering form)" : ""), f.form + (f.items.length ? " " + f.items.map(i => i.n).join(", ") : "") + " · " + when(f.t));
   };
-  const toggle = (m, day) => h("button", { class: "link", type: "button", style: "font-weight:650", title: "Open the evidence for " + m.s, text: "▸ " + m.s, onclick: ev => { const b = ev.currentTarget, tr = b.closest("tr").nextElementSibling; if (tr && tr.classList.contains("scan-detail")) { tr.hidden = !tr.hidden; b.textContent = (tr.hidden ? "▸ " : "▾ ") + m.s; } } });
+  const liveEl = sym => (PUBLIC ? null : h("span", { class: "lv", "data-live": sym }));
+  const toggle = (m, day) => h("span", { style: "display:block" }, toggleBtn(m, day), liveEl(m.s));
+  const toggleBtn = (m, day) => h("button", { class: "link", type: "button", style: "font-weight:650", title: "Open the evidence for " + m.s, text: "▸ " + m.s, onclick: ev => { const b = ev.currentTarget, tr = b.closest("tr").nextElementSibling; if (tr && tr.classList.contains("scan-detail")) { tr.hidden = !tr.hidden; b.textContent = (tr.hidden ? "▸ " : "▾ ") + m.s; } } });
 
   /* ----- the mover list: one card per stock, the story in one glance, click for the evidence ----- */
   const CSS = `
@@ -142,6 +144,16 @@
   .sc-guide dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 22px;margin:12px 0 8px}
   .sc-guide dt{font-weight:650;font-size:13px} .sc-guide dd{margin:2px 0 0;color:var(--ink2);font-size:13px}
   .mv-chip.risk{background:color-mix(in srgb,var(--down) 12%,transparent);color:var(--down);font-weight:600}
+  .lv{display:inline-block;font-size:12.5px;font-weight:650;font-variant-numeric:tabular-nums;border-radius:6px;padding:1px 7px;margin-top:3px;white-space:nowrap}
+  .lv:empty{display:none} .lv.up{color:var(--up)} .lv.down{color:var(--down)} .lv small{font-weight:500;color:var(--muted);margin-left:5px}
+  .lv.tick-up{animation:lvup 1.1s ease-out} .lv.tick-down{animation:lvdown 1.1s ease-out}
+  @keyframes lvup{from{background:color-mix(in srgb,var(--up) 35%,transparent)}to{background:transparent}}
+  @keyframes lvdown{from{background:color-mix(in srgb,var(--down) 35%,transparent)}to{background:transparent}}
+  .lv-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:8px 14px;margin:0 0 14px;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+  .lv-dot{width:9px;height:9px;border-radius:50%;background:var(--axis);display:inline-block;margin-right:6px}
+  .lv-bar.on .lv-dot{background:var(--up);animation:lvpulse 1.6s infinite}
+  @keyframes lvpulse{50%{opacity:.35}}
+  .lv-bar button{font:inherit;font-size:12.5px;border:1px solid var(--border);background:var(--wash);color:var(--ink);padding:3px 11px;border-radius:8px;cursor:pointer;margin-left:auto}
   .ld-list{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--page)}
   .ld-row{display:grid;grid-template-columns:minmax(150px,1.3fr) 110px minmax(120px,1fr) 110px;gap:10px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--grid)}
   .ld-row:last-child{border-bottom:0}
@@ -321,7 +333,7 @@
     const main = h("div", { class: "mv-main", role: "button", tabindex: "0", "aria-expanded": "false", title: "Click for the evidence on " + m.s },
       h("div", {}, h("span", { class: "mv-sym", text: m.s }), h("span", { class: "mv-name", title: m.name, text: m.name })),
       spark(m),
-      h("div", { class: "mv-px" }, h("span", { class: "a" }, px(m.prev), h("i", { text: "→" }), px(m.last)), h("span", { class: "b", text: dayLabel(m.prevDay) + " close → " + dayAt(day, m.lastAt) })),
+      h("div", { class: "mv-px" }, h("span", { class: "a" }, px(m.prev), h("i", { text: "→" }), px(m.last)), h("span", { class: "b", text: dayLabel(m.prevDay) + " close → " + dayAt(day, m.lastAt) }), liveEl(m.s)),
       h("span", { class: "mv-pct " + c, text: (m.lastPct > 0 ? "▲ " : m.lastPct < 0 ? "▼ " : "") + pct(m.lastPct) }),
       h("span", { class: "mv-chev", text: "▸" }));
     const row = h("div", { class: "mv-row r-" + c }, main, h("div", { class: "mv-plainshort", text: plainShort(m) }), h("div", { class: "mv-chips" }, chips));
@@ -375,6 +387,47 @@
     if (vol) t.push(["Busiest vs usual", vol.s, (vol.volX >= 10 ? fmt(Math.round(vol.volX)) : vol.volX.toFixed(1)) + "× usual", "flat"]);
     t.push(["With a headline or filing", all.filter(hasLead).length + " of " + all.length, "", "flat"]);
     return h("div", { class: "sc-tiles" }, t.map(([k, v, s, c]) => h("div", { class: "sc-tile" }, h("div", { class: "k", text: k }), h("div", { class: "v" }, v, s ? h("small", { class: c, text: s }) : null))));
+  }
+
+  /* ----- live prices: the local dashboard server reads Alpaca every few seconds (real-time IEX trades, else the 15-minute-delayed ones). The public copy has no server, so it shows none. ----- */
+  const LIVE = { timer: null, paused: false, bar: null };
+  function liveBar() {
+    const b = h("div", { class: "lv-bar" }, h("span", {}, h("i", { class: "lv-dot" }), h("b", { text: "Live prices" })), h("span", { class: "lv-msg", text: "connecting…" }),
+      h("button", { type: "button", text: "Pause", onclick: ev => { LIVE.paused = !LIVE.paused; ev.currentTarget.textContent = LIVE.paused ? "Resume" : "Pause"; b.classList.toggle("on", !LIVE.paused); if (!LIVE.paused) pollLive(); } }));
+    LIVE.bar = b;
+    return b;
+  }
+  const liveMsg = (t, on) => { if (!LIVE.bar) return; LIVE.bar.querySelector(".lv-msg").textContent = t; LIVE.bar.classList.toggle("on", !!on && !LIVE.paused); };
+  function paintLive(d) {
+    let n = 0, late = 0;
+    for (const el of document.querySelectorAll("#tab-scan [data-live]")) {
+      const q = d.quotes[el.dataset.live];
+      if (!q) { el.replaceChildren(); continue; }
+      n++; if (q.src !== "live") late++;
+      const chg = q.pc ? q.p / q.pc - 1 : null, was = Number(el.dataset.p || 0);
+      el.className = "lv " + (chg == null ? "" : chg > 0 ? "up" : chg < 0 ? "down" : "");
+      el.replaceChildren("Now " + px(q.p) + (chg == null ? "" : " " + (chg > 0 ? "▲ " : chg < 0 ? "▼ " : "") + pct(chg, 1)), h("small", { text: q.src === "live" ? "" : "15 min behind" }));
+      el.title = "Last trade " + new Date(q.t).toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles" }) + " Seattle time (" + (q.src === "live" ? "real-time IEX trade" : "15-minute-delayed consolidated trade") + "). The percent is the change from the previous close.";
+      if (was && was !== q.p) { const k = q.p > was ? "tick-up" : "tick-down"; el.classList.add(k); }
+      el.dataset.p = q.p;
+    }
+    const at = new Date(d.at).toLocaleTimeString("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "2-digit", second: "2-digit" });
+    liveMsg(n + " stocks · updated " + at + " Seattle time · " + (d.open ? "market open" : "market closed or not open yet: showing the last trade") + (late ? " · " + late + " are 15 minutes behind (no recent real-time trade)" : "") + " · prices refresh every 10 seconds", d.open);
+  }
+  async function pollLive() {
+    if (PUBLIC || LIVE.paused || document.hidden || !LIVE.bar || !LIVE.bar.isConnected) return;
+    try {
+      const r = await fetch("/api/scanquotes", { cache: "no-store" });
+      if (!r.ok) throw new Error("status " + r.status);
+      paintLive(await r.json());
+    } catch (err) { liveMsg("not available right now (" + err.message + "); the dashboard server may be off", false); }
+  }
+  function startLive() {
+    clearInterval(LIVE.timer);
+    if (PUBLIC) return;
+    pollLive();
+    LIVE.timer = setInterval(pollLive, 10000);
+    if (!LIVE.hooked) { LIVE.hooked = true; document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLive(); }); }
   }
 
   function draw() {
@@ -433,7 +486,9 @@
     body.prepend(nav);
     const ld = lastDayCard(d);
     if (ld) body.prepend(ld);
+    if (!PUBLIC) body.prepend(liveBar());
     body.append(h("p", { class: "sub", text: "Limits: Alpaca's free feed leaves out the newest 15 minutes and some thin stocks; headlines come from one feed (Benzinga) and miss small-company filings, trading halts and social media; a split-adjusted history cannot see every spin-off. A headline near a move is a lead, not proof of the reason. This page is a record, not a recommendation." }));
+    startLive();
   }
 
   async function load() {

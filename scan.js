@@ -81,6 +81,7 @@
     const parts = [], fact = (label, text) => h("li", {}, h("b", { text: label + " " }), text);
     const pb = kind ? plainBox(m, day, kind) : null;
     if (pb) parts.push(pb);
+    if (kind) { const rc = riskChips(m); if (rc.length) parts.push(h("div", { class: "mv-chips", style: "padding:0 0 10px" }, rc)); }
     const line = priceLine(m, day);
     if (line) parts.push(line);
     const facts = [];
@@ -140,6 +141,12 @@
   .sc-guide summary{cursor:pointer;font-weight:650;font-size:14px}
   .sc-guide dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px 22px;margin:12px 0 8px}
   .sc-guide dt{font-weight:650;font-size:13px} .sc-guide dd{margin:2px 0 0;color:var(--ink2);font-size:13px}
+  .mv-chip.risk{background:color-mix(in srgb,var(--down) 12%,transparent);color:var(--down);font-weight:600}
+  .ld-list{max-height:380px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--page)}
+  .ld-row{display:grid;grid-template-columns:minmax(150px,1.3fr) 110px minmax(120px,1fr) 110px;gap:10px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--grid)}
+  .ld-row:last-child{border-bottom:0}
+  .ld-id b{display:block;font-size:15px} .ld-kind{font-size:12.5px;color:var(--ink2)} .ld-px{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .ld-row .mv-pct{font-size:14px;padding:3px 10px}
   .mv-bar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:8px 0 10px}
   .mv-bar h3{margin:0;font-size:15px}
   .seg{display:inline-flex;background:var(--wash);border-radius:9px;padding:2px}
@@ -172,6 +179,7 @@
   .mv-dl .k{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
   .mv-dl .v{font-size:13.5px;white-space:normal}
   @media (max-width:760px){
+    .ld-row{grid-template-columns:minmax(0,1fr) auto;gap:2px 10px} .ld-kind,.ld-px{grid-column:1} .ld-row .mv-pct{grid-column:2;grid-row:1 / span 2}
     .mv-main{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:12px 12px 6px}
     .mv-spark,.mv-chev{display:none}
     .sc-tiles{grid-template-columns:1fr 1fr;gap:8px}
@@ -235,6 +243,48 @@
     }
     return out;
   }
+  /* ----- risk tags: plain warnings drawn from the same numbers ----- */
+  function riskTags(m) {
+    const t = [], price = m.last != null ? m.last : m.now != null ? m.now : m.close != null ? m.close : m.price;
+    if (price != null && price < 1) t.push("Penny stock (under $1)");
+    if (m.shares != null && m.shares < 100000) t.push("Thin premarket trading");
+    else if (m.avgVol != null && m.avgVol < 150000 && m.shares == null) t.push("Thinly traded stock");
+    if (m.filings && m.filings.some(x => x.offering)) t.push("Share-offering filing (price often falls)");
+    if (m.news && m.news.items && m.news.items.some(x => x.k === "short")) t.push("Short-seller report");
+    if (m.ret20 != null && m.ret20 >= 0.5) t.push(m.ret20 >= 1 ? "Ran up " + (1 + m.ret20).toFixed(1) + "× in 20 days" : "Already up " + Math.round(m.ret20 * 100) + "% in 20 days");
+    else if (m.ret20 != null && m.ret20 <= -0.5) t.push("Down " + Math.round(Math.abs(m.ret20) * 100) + "% in 20 days");
+    if (m.hi52 && price != null && price <= m.hi52 * 0.2) t.push("Down " + Math.round((1 - price / m.hi52) * 100) + "% from its 1-year high");
+    if (m.lastPct != null && Math.abs(m.lastPct) >= 1) t.push(m.lastPct > 0 ? "More than doubled before the open" : "Lost over half before the open");
+    return t;
+  }
+  const riskChips = m => riskTags(m).map(x => h("span", { class: "mv-chip risk", text: "⚠ " + x }));
+  const CAT = { up: "Mover up", down: "Mover down", gapUp: "Gap up", gapDown: "Gap down", highs: "52-week high", lows: "52-week low", insider: "Insider buy" };
+  function lastDayCard(d) {
+    const L = (d.record && d.record.latest) || (S.replay && S.replay.latest);
+    if (!L || !L.flags || !L.flags.length) return null;
+    const UPS = { up: 1, gapUp: 1, highs: 1, insider: 1 }, dir = c => (UPS[c] ? 1 : -1);
+    const seen = new Map();                        // a stock flagged twice (a mover that also gapped) counts once
+    for (const e of L.flags) { const o = seen.get(e.s); if (!o) seen.set(e.s, Object.assign({}, e, { cats: [e.cat] })); else if (!o.cats.includes(e.cat)) o.cats.push(e.cat); }
+    const fl = [...seen.values()].sort((a, b) => b.c0 - a.c0), n = fl.length;
+    const rose = fl.filter(e => e.c0 > 0).length, kept = fl.filter(e => e.c0 * dir(e.cat) > 0).length;
+    const sorted = fl.map(e => e.c0).sort((a, b) => a - b), median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+    const ups = fl.filter(e => UPS[e.cat]), downs = fl.filter(e => !UPS[e.cat]), spy = L.spy && L.spy[0];
+    const tile = (k, v, small, c) => h("div", { class: "sc-tile" }, h("div", { class: "k", text: k }), h("div", { class: "v" }, v, small ? h("small", { class: c || "", text: small }) : null));
+    const tiles = h("div", { class: "sc-tiles" }, tile("Stocks flagged", String(n)), tile("Higher at the close than when flagged", rose + " of " + n), tile("Kept going the way the flag pointed", kept + " of " + n),
+      tile("Median change", tint(median, 1)), spy != null ? tile("S&P 500 fund that day", tint(spy, 1)) : null);
+    const said = [];
+    if (ups.length) said.push("Of the " + ups.length + " stocks flagged as moving up (movers, gaps, new highs, insider buys), " + ups.filter(e => e.c0 > 0).length + " were higher at the close than when they were flagged.");
+    if (downs.length) said.push("Of the " + downs.length + " flagged as falling, " + downs.filter(e => e.c0 < 0).length + " were lower at the close.");
+    const rows = fl.map(e => h("div", { class: "ld-row" }, h("div", { class: "ld-id" }, h("b", { text: e.s }), h("span", { class: "mv-name", title: e.name || "", text: e.name || "" })), h("span", { class: "ld-kind", text: e.cats.map(c => CAT[c] || c).join(" + ") }),
+      h("span", { class: "ld-px", text: e.price != null && e.close != null ? px(e.price) + " → " + px(e.close) : "" }), h("span", { class: "mv-pct " + cls(e.c0), text: (e.c0 > 0 ? "▲ " : e.c0 < 0 ? "▼ " : "") + pct(e.c0, 1) })));
+    const card_ = card("How the flags of " + dayLabel(L.day) + " did", null,
+      h("p", { class: "sub", text: "Every stock the scan flagged that morning, from the price when it was flagged to that day's close." }), tiles,
+      h("p", { text: said.join(" ") + " One day is luck-sized: it shows what happened, not what to expect. The 60-day replay further down is the bigger picture.", style: "margin:4px 0 10px;font-size:14px" }),
+      h("div", { class: "ld-list" }, rows),
+      h("p", { class: "sub", style: "margin-top:8px", text: L.source === "replay" ? "This day comes from the replay: the scan as it would have looked at 6:00 AM that morning. Real scans are scored here from the morning after they run. The S&P 500 fund is measured from the same morning minute to the close." : "A real scan, scored from the morning after it ran. The S&P 500 fund is its change from the previous close to the close." }));
+    card_.id = "sc-lastday";
+    return card_;
+  }
   const plainBox = (m, day, kind) => { const ps = plainParas(m, day, kind); return ps.length ? h("div", { class: "mv-plain" }, h("div", { class: "k", text: "In plain words" }), ps.map(t => h("p", { text: t }))) : null; };
   function plainShort(m) {
     const up = m.lastPct >= 0, x = m.volX;
@@ -261,6 +311,7 @@
   const hasLead = m => !!((m.news && m.news.last) || (m.filings && m.filings.length));
   function stockRow(m, day, kind) {
     const c = cls(m.lastPct), chips = [];
+    chips.push(...riskChips(m));
     if (m.hiPct != null) chips.push(h("span", { class: "mv-chip", title: "The highest price seen before the open", text: "Peak " + pct(m.hiPct) + " at " + clock(m.hiAt) }));
     if (m.jump) chips.push(h("span", { class: "mv-chip", title: "The biggest move inside any 5 minutes", text: "Fastest 5 min " + pct(m.jump.pct) + " · " + clock(m.jump.from) }));
     chips.push(h("span", { class: "mv-chip" + (m.volX != null && m.volX >= 5 ? " hot" : ""), title: "Shares traded before the open" + (m.avgVol ? "; a usual full day is " + big(m.avgVol) : ""), text: big(m.shares) + " shares" + (m.volX != null ? " · " + (m.volX >= 10 ? fmt(Math.round(m.volX)) : m.volX.toFixed(1)) + "× usual" : "") }));
@@ -374,12 +425,14 @@
         : empty("Nothing to show yet."),
       h("p", { class: "sub", text: "Small counts are luck-sized: a handful of flags says nothing. This compares with the flagged price only, not with the S&P 500 fund." })));
     const nav = h("div", { class: "sc-nav" });
-    for (const [label, pre] of [["Premarket movers", "sc-premarket-movers"], ["Gaps", "sc-gaps"], ["52-week highs and lows", "sc-52-week"], ["Insider buys", "sc-insider-buys"], ["Replay", "sc-how-the-flags"], ["Past flags", "sc-how-past"]]) {
+    for (const [label, pre] of [["Last day scored", "sc-lastday"], ["Premarket movers", "sc-premarket-movers"], ["Gaps", "sc-gaps"], ["52-week highs and lows", "sc-52-week"], ["Insider buys", "sc-insider-buys"], ["Replay", "sc-how-the-flags"], ["Past flags", "sc-how-past"]]) {
       const el = body.querySelector('[id^="' + pre + '"]');
       if (el) nav.append(h("button", { type: "button", text: label, onclick: () => el.scrollIntoView({ behavior: "smooth", block: "start" }) }));
     }
     body.prepend(guide());
     body.prepend(nav);
+    const ld = lastDayCard(d);
+    if (ld) body.prepend(ld);
     body.append(h("p", { class: "sub", text: "Limits: Alpaca's free feed leaves out the newest 15 minutes and some thin stocks; headlines come from one feed (Benzinga) and miss small-company filings, trading halts and social media; a split-adjusted history cannot see every spin-off. A headline near a move is a lead, not proof of the reason. This page is a record, not a recommendation." }));
   }
 

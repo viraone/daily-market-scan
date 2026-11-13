@@ -173,6 +173,80 @@
     out.push("These are facts about past prices. They do not say why the price moved or what it will do next.");
     return out;
   }
+  /* ----- yesterday, minute by minute: when the shares traded, how big the trades were, and what public data can and cannot say about who bought ----- */
+  const SESSIONS = [["Before the open", "1:00 to 6:30 AM", 0, 11, "#8da2c7"], ["Regular session", "6:30 AM to 1:00 PM", 11, 24, "#2d6cdf"], ["After the close", "1:00 to 5:00 PM", 24, 32, "#b08bd8"]];
+  const sessOf = pm => (pm < 390 ? "before the open" : pm < 780 ? "regular session" : "after the close");
+  const bucketName = i => clock(60 + i * 30) + " to " + clock(90 + i * 30);
+  function yChart(Y, tot) {
+    const W = 600, Ht = 112, L = 8, R = 8, Tp = 16, axis = 16, bw = (W - L - R) / 32, vmax = Math.max(...Y.b.map(b => (b ? b[0] : 0)), 1), top = Ht - axis;
+    const X = i => L + i * bw, Hh = v => v / vmax * (top - Tp - 4);
+    const band = SESSIONS.map(([name, , a, z, col]) => `<rect x="${X(a)}" y="${Tp - 12}" width="${(z - a) * bw}" height="${top - Tp + 12}" fill="${col}" opacity=".10"/><text x="${X(a) + 4}" y="${Tp - 3}" font-size="9" fill="currentColor" opacity=".7">${name}</text>`).join("");
+    const bars = Y.b.map((b, i) => { if (!b) return ""; const col = SESSIONS.find(q => i >= q[2] && i < q[3])[4], hh = Math.max(Hh(b[0]), 1);
+      return `<rect x="${(X(i) + 1.5).toFixed(1)}" y="${(top - hh).toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${hh.toFixed(1)}" fill="${col}" opacity=".9"/>`; }).join("");
+    const ticks = [[0, "1 AM"], [6, "4 AM"], [11, "6:30 AM"], [20, "11 AM"], [24, "1 PM"], [32, "5 PM"]].map(([i, t]) => `<text x="${X(i).toFixed(1)}" y="${Ht - 3}" font-size="9" fill="currentColor" opacity=".55" text-anchor="${i === 0 ? "start" : i === 32 ? "end" : "middle"}">${t}</text>`).join("");
+    const box = h("div", { class: "pl" });
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${Ht}" width="100%" style="max-width:${W}px;height:auto;cursor:crosshair" role="img" aria-label="Shares traded yesterday by half hour, Seattle time">` + band + `<rect class="yc-hi" y="${Tp - 12}" height="${top - Tp + 12}" fill="currentColor" opacity=".1" style="display:none"/>` + bars + ticks + `</svg>`;
+    const svg = box.querySelector("svg"), hi = svg.querySelector(".yc-hi"), tip = h("div", { class: "pl-tip" });
+    tip.hidden = true;
+    box.append(tip);
+    const hide = () => { tip.hidden = true; hi.style.display = "none"; };
+    const show = ev => {
+      const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W, i = Math.floor((vx - L) / bw);
+      if (i < 0 || i > 31) return hide();
+      const b = Y.b[i];
+      hi.setAttribute("x", X(i)); hi.setAttribute("width", bw); hi.style.display = "";
+      tip.replaceChildren(h("div", { style: "font-weight:650", text: bucketName(i) + " Seattle time" }), h("div", { class: "sub", style: "margin:0", text: SESSIONS.find(q => i >= q[2] && i < q[3])[0] }),
+        b ? h("div", { text: big(b[0]) + " shares (" + Math.round(b[0] / tot * 100) + "% of the day) in " + fmt(b[1]) + " trades" }) : h("div", { text: "No trades in this half hour" }),
+        b ? h("div", { class: "sub", style: "margin:0", text: "Price " + px(b[3]) + " high, " + px(b[4]) + " low · " + px(b[2]) + " at the start, " + px(b[5]) + " at the end" }) : null,
+        b && b[1] ? h("div", { class: "sub", style: "margin:0", text: "Average trade about " + fmt(Math.round(b[0] / b[1])) + " shares" }) : null);
+      tip.hidden = false;
+      const br = box.getBoundingClientRect(), px_ = ev.clientX - br.left;
+      tip.style.left = (px_ > br.width / 2 ? Math.max(0, px_ - tip.offsetWidth - 14) : px_ + 14) + "px";
+    };
+    svg.addEventListener("pointermove", show); svg.addEventListener("pointerdown", show); svg.addEventListener("pointerleave", hide);
+    return box;
+  }
+  function ySection(m, H, x, Y, kv, times) {
+    const c = H.c, last = x.last, day = H.d[last], vDay = H.v[last], avg = m.avgVol, tot = Y.shares || 1, cov = tot / vDay;
+    const part = (a, z) => Y.b.slice(a, z).reduce((q, b) => q + (b ? b[0] : 0), 0), pcs = SESSIONS.map(q => part(q[2], q[3]));
+    const busyHalf = Y.b.reduce((bi, b, i) => ((b ? b[0] : 0) > (Y.b[bi] ? Y.b[bi][0] : 0) ? i : bi), 0), avgTrade = Y.trades ? tot / Y.trades : 0;
+    const at = (pm, price) => px(price) + " at " + clock(pm), dateLine = dayLabel(day) + ", " + day.slice(0, 4);
+    const sizeHint = avgTrade < 100 ? "mostly small trades, the kind many individual investors make" : avgTrade < 400 ? "a mix of small and mid-sized trades" : "bigger trades on average, which can come from funds, or from traders splitting a big order into pieces";
+    const vsVwap = c[last] / Y.vwap - 1;
+    const plain = [
+      dateLine + ": " + m.s + " traded " + big(vDay) + " shares" + (Y.trades ? " in about " + fmt(Y.trades) + " separate trades" : "") + (avg ? " (" + times(vDay, avg) + ")" : "") + ". Times below are Seattle time; the market is open 6:30 AM to 1:00 PM.",
+      "The first trade was " + at(Y.first[0], Y.first[1]) + " (" + sessOf(Y.first[0]) + ") and the last " + at(Y.last[0], Y.last[1]) + " (" + sessOf(Y.last[0]) + "). " + (Y.regOpen != null ? "The regular session opened at " + px(Y.regOpen) + ". " : "") +
+        "The day's high was " + at(Y.hi[0], Y.hi[1]) + " (" + sessOf(Y.hi[0]) + ") and its low " + at(Y.lo[0], Y.lo[1]) + " (" + sessOf(Y.lo[0]) + "). The regular session closed at " + px(c[last]) + ", " + upDown(x.ydChg) + ap(x.ydChg, 1) + " from the day before.",
+      "When the shares traded: " + SESSIONS.map((q, i) => (pcs[i] > 0 && pcs[i] / tot < 0.005 ? "under 1%" : Math.round(pcs[i] / tot * 100) + "%") + " " + q[0].toLowerCase()).join(", ") + ". The busiest half hour was " + bucketName(busyHalf) + " (" + big(Y.b[busyHalf][0]) + " shares). The busiest single minute was " + clock(Y.busy[0]) + ", with " + big(Y.busy[1]) + " shares in " + fmt(Y.busy[2]) + " trades" + ([390, 779, 780].includes(Y.busy[0]) ? ", a minute that is often busy because the market's opening and closing prices are set then" : "") + ".",
+      "The average trade was about " + fmt(Math.round(avgTrade)) + " shares (about " + px(avgTrade * Y.vwap) + " per trade): " + sizeHint + ". That is a hint about who is trading, never proof.",
+      "The average price paid, weighting each trade by its size, was " + px(Y.vwap) + ". The close of " + px(c[last]) + " was " + ap(vsVwap, 1) + (vsVwap < 0 ? " below" : " above") + " it, so someone who bought at the day's average price and held to the close is " + upDown(vsVwap) + ap(vsVwap, 1) + "."
+    ];
+    if (cov < 0.97) plain.push("The timeline adds up to " + big(tot) + " of the day's " + big(vDay) + " shares; the rest are trades the price feed counts in the daily total but leaves out of its minute-by-minute data.");
+    const fl = (m.filings || []).filter(f => /^(3|4|5|144|SC 13[DG].*|SCHEDULE 13[DG].*)$/i.test(f.form || ""));
+    const who = h("div", { class: "bm-who" }, h("div", { class: "k", text: "Who bought these shares?" }),
+      h("p", { text: "Public data cannot say. Trades are anonymous: an exchange matches a buyer with a seller without publishing names, and every share one person bought was sold by someone else at that same moment. The buyers could be individuals, funds, or market makers (firms that stand ready to buy and sell all day). Even the timeline above only shows when shares traded and in what size, not who was on either side." }),
+      h("p", { text: "Names appear only in the filings that owners must make. These are the places to look:" }),
+      h("ul", { class: "bm-links" },
+        h("li", {}, h("b", { text: "Insiders " }), "(executives, directors, owners of 10% or more) report their own buys and sells within 2 business days on a Form 4. ", m.cik ? link("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=" + m.cik + "&type=4&owner=include&count=40", "Form 4 filings ↗") : null, m.cik ? "  ·  " : "", link("https://finance.yahoo.com/quote/" + encodeURIComponent(symFor(m, "-")) + "/insider-transactions", "Insider transactions ↗")),
+        h("li", {}, h("b", { text: "Big owners " }), "(5% or more of the company) file a Schedule 13D or 13G. ", m.cik ? link("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=" + m.cik + "&type=SC+13&owner=include&count=40", "13D and 13G filings ↗") : null),
+        h("li", {}, h("b", { text: "Funds and institutions " }), "report what they hold once a quarter on a Form 13F, up to 45 days late, so it shows who owned shares, not who bought yesterday. ", link("https://finance.yahoo.com/quote/" + encodeURIComponent(symFor(m, "-")) + "/holders", "Major holders ↗"))),
+      h("p", { class: "sub", style: "margin:6px 0 0", text: fl.length ? "In the 3 days before the scan this company filed " + fl.map(f => f.form + " on " + shortDay(f.t.slice(0, 10))).join(", ") + ": reports about owners. They are listed under \"SEC filings\" lower on this card." : "In the 3 days before the scan this company filed no owner reports (no Form 3, 4, 5 or 13D/G), so nothing public names a buyer or seller from around then." }));
+    const cells = [
+      kv("Regular session opened", Y.regOpen != null ? px(Y.regOpen) : "–", "The first price when the regular session began at 6:30 AM Seattle time."),
+      kv("Day's high", px(Y.hi[1]), clock(Y.hi[0]) + ", " + sessOf(Y.hi[0]) + ". The highest price any trade was made at."),
+      kv("Day's low", px(Y.lo[1]), clock(Y.lo[0]) + ", " + sessOf(Y.lo[0]) + ". The lowest price any trade was made at."),
+      kv("Closed", px(c[last]) + " " + (x.ydChg > 0 ? "▲ " : x.ydChg < 0 ? "▼ " : "") + pct(x.ydChg, 1), "The last price of the regular session (1:00 PM Seattle time), and the change from the day before."),
+      kv("Shares traded", big(vDay), avg ? times(vDay, avg) + ": compared with a usual day of " + big(avg) + ". Over 1× means more trading than normal." : "How many shares changed hands."),
+      kv("Number of trades", fmt(Y.trades), "Each trade can be a few shares or thousands. More trades usually means more people involved."),
+      kv("Average trade", fmt(Math.round(avgTrade)) + " shares", "About " + px(avgTrade * Y.vwap) + " per trade: " + sizeHint + "."),
+      kv("Busiest minute", clock(Y.busy[0]), big(Y.busy[1]) + " shares in " + fmt(Y.busy[2]) + " trades (" + Math.round(Y.busy[1] / tot * 100) + "% of the day)."),
+      kv("Average price paid", px(Y.vwap), "The average price per share over everything that traded that day (bigger trades count for more). Roughly what an average buyer paid.")
+    ];
+    return [h("div", { class: "bm-h", text: "Yesterday: " + dateLine }),
+      h("div", { class: "mv-plain", style: "margin:4px 0 10px" }, h("div", { class: "k", text: "Yesterday in plain words" }), plain.map(t => h("p", { text: t }))),
+      h("div", { class: "sub", style: "margin:0 0 4px", text: "When the " + big(tot) + " shares traded, in half-hour steps (Seattle time). Taller bar = more shares. Hover or touch a bar for the price and trade sizes in that half hour." }), yChart(Y, tot),
+      h("div", { class: "mv-dl bm-grid" }, cells), who];
+  }
   function beforePanel(m) {
     const H0 = S.hist && S.hist.s && S.hist.s[m.s], k = H0 ? H0.d.filter(d => d <= m.prevDay).length : 0;
     const H = k >= 5 ? { d: H0.d.slice(0, k), c: H0.c.slice(0, k), h: H0.h.slice(0, k), l: H0.l.slice(0, k), v: H0.v.slice(0, k) } : null;
@@ -180,14 +254,18 @@
     const times = (v, avg) => (avg ? (v / avg >= 10 ? fmt(Math.round(v / avg)) : (v / avg).toFixed(1)) + "× usual" : "");
     const group = (title, cells) => cells.length ? [h("div", { class: "bm-h", text: title }), h("div", { class: "mv-dl bm-grid" }, cells)] : [];
     const panel = h("div", { class: "bm-panel" }), tone = x => (x > 0 ? "▲ " : x < 0 ? "▼ " : "");
-    const yest = [], trend = [], vol = [], year = [];
+    const yest = [], trend = [], vol = [], year = []; let ysec = null;
     if (H) {
       const x = bmStats(H, m), c = H.c, last = x.last;
       panel.append(h("div", { class: "mv-plain", style: "margin:0 0 10px" }, h("div", { class: "k", text: "What these " + x.n + " sessions say, in plain words" }), bmPlain(H, m, x).map(t => h("p", { text: t }))));
       panel.append(h("div", { class: "sub", style: "margin:0 0 4px", text: "The chart: the green line is each day's closing price. The bars underneath are the shares traded that day (green if the price closed higher than the day before, red if lower). The grey dashed line is the 20-session average price" + (m.last != null ? "; the blue dashed line is this morning's premarket price" : "") + (m.avgVol ? "; the grey dashed line over the bars is a usual day's volume" : "") + ". Hover or touch any day." }), bmChart(H, m, x));
-      yest.push(kv("Close (" + shortDay(H.d[last]) + ")", px(c[last]) + " " + tone(x.ydChg) + pct(x.ydChg, 1), "The last price of the day, and the change from the day before."));
-      yest.push(kv("Range that day", px(H.l[last]) + " to " + px(H.h[last]), "The lowest and highest price it traded at during the day. A wide range means the price swung a lot."));
-      yest.push(kv("Shares traded", big(H.v[last]), m.avgVol ? times(H.v[last], m.avgVol) + ": compared with a usual day of " + big(m.avgVol) + ". Over 1× means more trading than normal." : "How many shares changed hands."));
+      const Y = H0.y && H0.y.day === H.d[last] ? H0.y : null;
+      if (Y) ysec = ySection(m, H, x, Y, kv, times);
+      else {
+        yest.push(kv("Close (" + shortDay(H.d[last]) + ")", px(c[last]) + " " + tone(x.ydChg) + pct(x.ydChg, 1), "The last price of the day, and the change from the day before."));
+        yest.push(kv("Range that day", px(H.l[last]) + " to " + px(H.h[last]), "The lowest and highest price it traded at during the day. A wide range means the price swung a lot."));
+        yest.push(kv("Shares traded", big(H.v[last]), m.avgVol ? times(H.v[last], m.avgVol) + ": compared with a usual day of " + big(m.avgVol) + ". Over 1× means more trading than normal." : "How many shares changed hands."));
+      }
       trend.push(kv("Typical day's move", ap(x.absMed, 1), "How far it usually moves in one day. Biggest jump " + pct(x.maxUp, 0) + " (" + shortDay(H.d[x.upI]) + "), biggest drop " + pct(x.maxDn, 0) + " (" + shortDay(H.d[x.dnI]) + ")."));
       trend.push(kv("Change over the stretch", pct(x.chAll, 0) + (x.ch20 != null ? " · last 20 sessions " + pct(x.ch20, 0) : ""), "From the first close in the chart to yesterday's, and over the last 20 sessions (about one month)."));
       trend.push(kv("Closing high", px(c[x.hiI]), shortDay(H.d[x.hiI]) + (x.hiI === last ? " (yesterday)" : ". Someone who bought at that close is " + upDown(c[last] / c[x.hiI] - 1) + ap(c[last] / c[x.hiI] - 1, 0) + " at yesterday's close.")));
@@ -205,7 +283,7 @@
       if (at != null) year.push(kv("Where yesterday's close sat", Math.round(Math.min(Math.max(at, 0), 1) * 100) + "% of the way up", "0% is the year's low and 100% its high. " + (at < 0.2 ? "Near the bottom of the year's range." : at > 0.8 ? "Near the top of the year's range." : "Middle of the year's range.")));
       year.push(kv("From the 52-week high", ap((m.prev != null ? m.prev : m.close) / m.hi52 - 1, 0) + " below", "How far yesterday's close was under the year's highest price."));
     }
-    panel.append(...group("Yesterday", yest), ...group("The price over these " + (H ? H.d.length : 60) + " sessions", trend), ...group("Trading volume (shares traded)", vol), ...group("The past year", year));
+    panel.append(...(ysec || group("Yesterday", yest)), ...group("The price over these " + (H ? H.d.length : 60) + " sessions", trend), ...group("Trading volume (shares traded)", vol), ...group("The past year", year));
     const y = symFor(m, "-"), L = (href, t, why) => h("li", {}, link(href, t + " ↗"), h("span", { class: "sub", style: "margin:0", text: " " + why }));
     panel.append(h("div", { style: "margin-top:12px" }, h("b", { text: "Dig deeper: " }), h("span", { class: "sub", style: "margin:0", text: "these open other websites in a new tab" }),
       h("ul", { class: "bm-links" },
@@ -343,6 +421,7 @@
   .bm-btn:hover b,.bm-btn:focus-visible b{text-decoration:underline}
   .bm-chev{display:inline-block;width:1.1em;color:var(--s1);font-size:13px} .bm-hint{color:var(--s1);font-size:12px;font-weight:650;background:var(--wash);border-radius:999px;padding:1px 9px;margin-left:4px;white-space:nowrap}
   .bm-panel{margin:8px 0 10px -18px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+  .bm-who{margin:12px 0 4px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--wash)} .bm-who .k{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)} .bm-who p{margin:6px 0}
   .bm-h{margin:14px 0 4px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)} .bm-grid{margin-top:2px} .bm-links{margin:4px 0 0;padding-left:18px} .bm-links li{margin:2px 0}
   li.bm{list-style:none;margin-left:-18px}
   .pl{position:relative}

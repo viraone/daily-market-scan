@@ -128,29 +128,86 @@
     });
     return li;
   }
+  const ap = (x, d) => pct(Math.abs(x), d).replace("+", "");                        // a size, without a sign
+  const med = a => { const q = [...a].sort((x, y) => x - y), k = q.length; return k % 2 ? q[(k - 1) / 2] : (q[k / 2 - 1] + q[k / 2]) / 2; };
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const upDown = x => (x > 0 ? "up " : x < 0 ? "down " : "unchanged ");
+  /* every number about the 60 sessions, worked out once, so the sentences and the cells agree */
+  function bmStats(H, m) {
+    const n = H.d.length, last = n - 1, c = H.c, rets = c.slice(1).map((v, i) => (c[i] ? v / c[i] - 1 : 0));
+    const sma = k => mean(c.slice(-Math.min(k, n))), absMed = med(rets.map(Math.abs)) || 0.0001;
+    const hiI = c.indexOf(Math.max(...c)), loI = c.indexOf(Math.min(...c)), vI = H.v.indexOf(Math.max(...H.v));
+    const maxUp = Math.max(...rets), maxDn = Math.min(...rets), upI = rets.indexOf(maxUp) + 1, dnI = rets.indexOf(maxDn) + 1;
+    return { n, last, rets, absMed, sma20: sma(20), sma50: n >= 50 ? sma(50) : null, hiI, loI, vI, maxUp, maxDn, upI, dnI,
+      ydChg: rets[rets.length - 1], upDays: rets.filter(x => x > 0.0005).length, dnDays: rets.filter(x => x < -0.0005).length,
+      big: rets.filter(x => Math.abs(x) >= 0.10).length, bigVol: m.avgVol ? H.v.filter(v => v >= 3 * m.avgVol).length : null,
+      ch20: n > 20 && c[last - 20] ? c[last] / c[last - 20] - 1 : null, chAll: c[0] ? c[last] / c[0] - 1 : null };
+  }
+  /* the plain-words story, from fixed rules (no AI): what the 60 sessions show, and where this morning's price sits in them */
+  function bmPlain(H, m, x) {
+    const c = H.c, cl = c[x.last], out = [], avg = m.avgVol, at = m.hi52 != null && m.lo52 != null && m.hi52 > m.lo52 ? (cl - m.lo52) / (m.hi52 - m.lo52) : null;
+    let t = "Over these " + x.n + " sessions (" + shortDay(H.d[0]) + " to " + shortDay(H.d[x.last]) + ") the price went from " + px(c[0]) + " to " + px(cl) + ": " + upDown(x.chAll) + ap(x.chAll, 0) + ". ";
+    t += x.hiI === x.last ? "Yesterday's close was the highest of the stretch. " : "The highest close was " + px(c[x.hiI]) + " on " + shortDay(H.d[x.hiI]) + ", so a buyer at that close is " + upDown(cl / c[x.hiI] - 1) + ap(cl / c[x.hiI] - 1, 0) + " now. ";
+    t += x.loI === x.last ? "Yesterday's close was the lowest of the stretch." : "The lowest close was " + px(c[x.loI]) + " on " + shortDay(H.d[x.loI]) + ".";
+    out.push(t);
+    const a20 = cl >= x.sma20, a50 = x.sma50 == null ? null : cl >= x.sma50;
+    let tr = "Yesterday's close of " + px(cl) + " is " + (a20 ? "above" : "below") + " its 20-session average (" + px(x.sma20) + ")" + (a50 == null ? "" : " and " + (a50 === a20 ? "also " : "but ") + (a50 ? "above" : "below") + " its 50-session average (" + px(x.sma50) + ")") + ". ";
+    tr += a50 == null ? "" : a20 && a50 ? "A price above its recent averages means it has mostly been trading higher lately." : !a20 && !a50 ? "A price under its recent averages means it has mostly been trading lower lately." : "The two averages disagree, so the last month and the longer stretch point different ways.";
+    out.push(tr);
+    out.push("On a typical day it moves about " + ap(x.absMed, 1) + " (the middle of the " + x.rets.length + " daily moves). The biggest jump was " + pct(x.maxUp, 0) + " on " + shortDay(H.d[x.upI]) + " and the biggest drop " + pct(x.maxDn, 0) + " on " + shortDay(H.d[x.dnI]) + ". Yesterday's " + pct(x.ydChg, 1) + " was " +
+      (Math.abs(x.ydChg) < 0.6 * x.absMed ? "a quieter day than usual" : Math.abs(x.ydChg) > 1.6 * x.absMed ? "a bigger move than usual (about " + (Math.abs(x.ydChg) / x.absMed).toFixed(1) + " times a typical day)" : "an ordinary day") + ".");
+    if (avg) {
+      let v = "A usual day is about " + big(avg) + " shares, " + (avg < 100000 ? "which is thinly traded: a small number of buyers or sellers can move the price a lot." : avg >= 5000000 ? "which is heavily traded, so single orders move the price less." : "which is a middling amount of trading.") + " ";
+      v += x.bigVol ? x.bigVol + " of the " + x.n + " days had at least 3 times the usual shares; the busiest was " + shortDay(H.d[x.vI]) + " with " + big(H.v[x.vI]) + " (" + (H.v[x.vI] / avg).toFixed(0) + " times usual)" + (x.vI > 0 && c[x.vI - 1] ? ", when the price moved " + pct(c[x.vI] / c[x.vI - 1] - 1, 0) + ". " : ". ") : "No day in the stretch had even 3 times the usual shares; the busiest was " + shortDay(H.d[x.vI]) + ". ";
+      if (x.vI > 0 && c[x.vI - 1]) v += Math.abs(c[x.vI] / c[x.vI - 1] - 1) < 0.02 ? "Lots of shares changing hands while the price stayed put means plenty of buying and selling without the price going anywhere." : "Heavy trading together with a big price move means many people were on the same side that day.";
+      out.push(v);
+    }
+    if (m.last != null && m.lastPct != null) {
+      const higher = c.filter(v => v > m.last).length, jump = m.lastPct;
+      let k = "This morning's premarket price of " + px(m.last) + " is " + pct(jump, 0) + " from yesterday's close, about " + (Math.abs(jump) / x.absMed).toFixed(0) + " times a typical day's move. ";
+      k += jump > 0 ? (higher === 0 ? "That is above every close of the last " + x.n + " sessions. " : higher <= 3 ? "Only " + higher + " of the last " + x.n + " closes were higher. " : higher + " of the last " + x.n + " closes were higher. ") + (jump > x.maxUp ? "It is a bigger one-day jump than any in the stretch." : "The biggest jump in the stretch was " + pct(x.maxUp, 0) + ".")
+        : (c.filter(v => v < m.last).length === 0 ? "That is below every close of the last " + x.n + " sessions. " : "") + (jump < x.maxDn ? "It is a bigger one-day drop than any in the stretch." : "The biggest drop in the stretch was " + pct(x.maxDn, 0) + ".");
+      out.push(k);
+    }
+    if (at != null) out.push("Over the past year it has ranged from " + px(m.lo52) + " to " + px(m.hi52) + "; yesterday's close sits " + (at < 0.2 ? "near the bottom" : at > 0.8 ? "near the top" : "in the middle") + " of that range (" + Math.round(Math.min(Math.max(at, 0), 1) * 100) + "% of the way up).");
+    out.push("These are facts about past prices. They do not say why the price moved or what it will do next.");
+    return out;
+  }
   function beforePanel(m) {
     const H0 = S.hist && S.hist.s && S.hist.s[m.s], k = H0 ? H0.d.filter(d => d <= m.prevDay).length : 0;
     const H = k >= 5 ? { d: H0.d.slice(0, k), c: H0.c.slice(0, k), h: H0.h.slice(0, k), l: H0.l.slice(0, k), v: H0.v.slice(0, k) } : null;
-    const kv = (label, v, note) => h("div", {}, h("div", { class: "k", text: label }), h("div", { class: "v" }, v), note ? h("div", { class: "sub", style: "margin:0", text: note }) : null);
+    const kv = (label, v, note) => h("div", {}, h("div", { class: "k", text: label }), h("div", { class: "v" }, v), note ? h("div", { class: "sub", style: "margin:2px 0 0;white-space:normal", text: note }) : null);
     const times = (v, avg) => (avg ? (v / avg >= 10 ? fmt(Math.round(v / avg)) : (v / avg).toFixed(1)) + "× usual" : "");
-    const cells = [], panel = h("div", { class: "bm-panel" });
+    const group = (title, cells) => cells.length ? [h("div", { class: "bm-h", text: title }), h("div", { class: "mv-dl bm-grid" }, cells)] : [];
+    const panel = h("div", { class: "bm-panel" }), tone = x => (x > 0 ? "▲ " : x < 0 ? "▼ " : "");
+    const yest = [], trend = [], vol = [], year = [];
     if (H) {
-      const n = H.d.length, last = n - 1, prevC = H.c[last - 1], dayChg = prevC ? H.c[last] / prevC - 1 : null;
-      panel.append(h("div", { class: "sub", style: "margin:0 0 4px", text: "The last " + n + " sessions up to " + dayLabel(m.prevDay) + ": price line on top, shares traded below (green bars: the price closed up that day, red: down). Hover or touch for any day." }), bmChart(H, m));
-      const hiI = H.c.indexOf(Math.max(...H.c)), loI = H.c.indexOf(Math.min(...H.c)), vI = H.v.indexOf(Math.max(...H.v));
-      cells.push(kv("Yesterday (" + shortDay(H.d[last]) + ")", px(H.c[last]) + (dayChg == null ? "" : " " + (dayChg > 0 ? "▲ " : dayChg < 0 ? "▼ " : "") + pct(dayChg, 1)), "range " + px(H.l[last]) + " to " + px(H.h[last]) + " · " + big(H.v[last]) + " shares" + (m.avgVol ? " (" + times(H.v[last], m.avgVol) + ")" : "")));
-      cells.push(kv(n + "-session closing high", px(H.c[hiI]), shortDay(H.d[hiI]) + (hiI === last ? " (yesterday)" : "") + " · yesterday's close is " + pct(H.c[last] / H.c[hiI] - 1, 0) + " from it"));
-      cells.push(kv(n + "-session closing low", px(H.c[loI]), shortDay(H.d[loI]) + (loI === last ? " (yesterday)" : "") + " · yesterday's close is " + pct(H.c[last] / H.c[loI] - 1, 0) + " from it"));
-      cells.push(kv("Busiest day of the " + n, big(H.v[vI]) + " shares", shortDay(H.d[vI]) + (m.avgVol ? " · " + times(H.v[vI], m.avgVol) : "") + (vI > 0 && H.c[vI - 1] ? " · price " + pct(H.c[vI] / H.c[vI - 1] - 1, 0) + " that day" : "")));
+      const x = bmStats(H, m), c = H.c, last = x.last;
+      panel.append(h("div", { class: "mv-plain", style: "margin:0 0 10px" }, h("div", { class: "k", text: "What these " + x.n + " sessions say, in plain words" }), bmPlain(H, m, x).map(t => h("p", { text: t }))));
+      panel.append(h("div", { class: "sub", style: "margin:0 0 4px", text: "The chart: the green line is each day's closing price. The bars underneath are the shares traded that day (green if the price closed higher than the day before, red if lower). The grey dashed line is the 20-session average price" + (m.last != null ? "; the blue dashed line is this morning's premarket price" : "") + (m.avgVol ? "; the grey dashed line over the bars is a usual day's volume" : "") + ". Hover or touch any day." }), bmChart(H, m, x));
+      yest.push(kv("Close (" + shortDay(H.d[last]) + ")", px(c[last]) + " " + tone(x.ydChg) + pct(x.ydChg, 1), "The last price of the day, and the change from the day before."));
+      yest.push(kv("Range that day", px(H.l[last]) + " to " + px(H.h[last]), "The lowest and highest price it traded at during the day. A wide range means the price swung a lot."));
+      yest.push(kv("Shares traded", big(H.v[last]), m.avgVol ? times(H.v[last], m.avgVol) + ": compared with a usual day of " + big(m.avgVol) + ". Over 1× means more trading than normal." : "How many shares changed hands."));
+      trend.push(kv("Typical day's move", ap(x.absMed, 1), "How far it usually moves in one day. Biggest jump " + pct(x.maxUp, 0) + " (" + shortDay(H.d[x.upI]) + "), biggest drop " + pct(x.maxDn, 0) + " (" + shortDay(H.d[x.dnI]) + ")."));
+      trend.push(kv("Change over the stretch", pct(x.chAll, 0) + (x.ch20 != null ? " · last 20 sessions " + pct(x.ch20, 0) : ""), "From the first close in the chart to yesterday's, and over the last 20 sessions (about one month)."));
+      trend.push(kv("Closing high", px(c[x.hiI]), shortDay(H.d[x.hiI]) + (x.hiI === last ? " (yesterday)" : ". Someone who bought at that close is " + upDown(c[last] / c[x.hiI] - 1) + ap(c[last] / c[x.hiI] - 1, 0) + " at yesterday's close.")));
+      trend.push(kv("Closing low", px(c[x.loI]), shortDay(H.d[x.loI]) + (x.loI === last ? " (yesterday)" : ". Yesterday's close is " + upDown(c[last] / c[x.loI] - 1) + ap(c[last] / c[x.loI] - 1, 0) + " from it.")));
+      trend.push(kv("Average closing price", "20 sessions " + px(x.sma20) + (x.sma50 != null ? " · 50 sessions " + px(x.sma50) : ""), "Yesterday's close is " + (c[last] >= x.sma20 ? "above" : "below") + " the 20-session average. Above means it has lately been trading higher than the recent norm; below, lower."));
+      trend.push(kv("Up days and down days", x.upDays + " up · " + x.dnDays + " down", "Days the close was higher or lower than the day before" + (x.rets.length - x.upDays - x.dnDays ? " (" + (x.rets.length - x.upDays - x.dnDays) + " unchanged)" : "") + "."));
+      trend.push(kv("Days that moved 10% or more", x.big + " of " + x.rets.length, x.big ? "A jumpy stock: it has made a move like this " + x.big + " time" + (x.big === 1 ? "" : "s") + " in the stretch." : "None: it has not made a move like this in the stretch, so a big move this morning is unusual for it."));
+      vol.push(kv("A usual day", m.avgVol ? big(m.avgVol) + " shares" : "–", "The average of the 20 sessions before yesterday. Few shares means a small number of people can move the price."));
+      vol.push(kv("Busiest day", big(H.v[x.vI]) + " shares", shortDay(H.d[x.vI]) + (m.avgVol ? " · " + times(H.v[x.vI], m.avgVol) : "") + (x.vI > 0 && c[x.vI - 1] ? " · the price moved " + pct(c[x.vI] / c[x.vI - 1] - 1, 0) + " that day." : ".")));
+      if (x.bigVol != null) vol.push(kv("Days with 3× the usual shares", x.bigVol + " of " + x.n, "Days when far more people than normal traded it, which is usually when something was going on."));
     } else panel.append(h("div", { class: "sub", style: "margin:0 0 6px", text: "The daily price history for this stock was not saved with this scan. The numbers and links below still work." }));
     if (m.hi52 != null && m.lo52 != null) {
       const at = m.hi52 > m.lo52 ? ((m.prev != null ? m.prev : m.close) - m.lo52) / (m.hi52 - m.lo52) : null;
-      cells.push(kv("52-week range", px(m.lo52) + " to " + px(m.hi52), (at == null ? "" : "yesterday's close sat " + Math.round(Math.min(Math.max(at, 0), 1) * 100) + "% of the way up · ") + "low " + (m.lo52Day ? shortDay(m.lo52Day) : "–") + ", high " + (m.hi52Day ? shortDay(m.hi52Day) : "–")));
+      year.push(kv("52-week range", px(m.lo52) + " to " + px(m.hi52), "The lowest and highest price in the past year (low " + (m.lo52Day ? shortDay(m.lo52Day) : "–") + ", high " + (m.hi52Day ? shortDay(m.hi52Day) : "–") + ")."));
+      if (at != null) year.push(kv("Where yesterday's close sat", Math.round(Math.min(Math.max(at, 0), 1) * 100) + "% of the way up", "0% is the year's low and 100% its high. " + (at < 0.2 ? "Near the bottom of the year's range." : at > 0.8 ? "Near the top of the year's range." : "Middle of the year's range.")));
+      year.push(kv("From the 52-week high", ap((m.prev != null ? m.prev : m.close) / m.hi52 - 1, 0) + " below", "How far yesterday's close was under the year's highest price."));
     }
-    if (m.avgVol) cells.push(kv("A usual day", big(m.avgVol) + " shares", "the average of the 20 sessions before yesterday"));
-    if (cells.length) panel.append(h("div", { class: "mv-dl bm-grid" }, cells));
+    panel.append(...group("Yesterday", yest), ...group("The price over these " + (H ? H.d.length : 60) + " sessions", trend), ...group("Trading volume (shares traded)", vol), ...group("The past year", year));
     const y = symFor(m, "-"), L = (href, t, why) => h("li", {}, link(href, t + " ↗"), h("span", { class: "sub", style: "margin:0", text: " " + why }));
-    panel.append(h("div", { style: "margin-top:10px" }, h("b", { text: "Dig deeper: " }), h("span", { class: "sub", style: "margin:0", text: "these open other websites in a new tab" }),
+    panel.append(h("div", { style: "margin-top:12px" }, h("b", { text: "Dig deeper: " }), h("span", { class: "sub", style: "margin:0", text: "these open other websites in a new tab" }),
       h("ul", { class: "bm-links" },
         L("https://finance.yahoo.com/quote/" + encodeURIComponent(y), "Yahoo Finance", "price, company profile, numbers about the business"),
         L("https://finance.yahoo.com/quote/" + encodeURIComponent(y) + "/key-statistics", "Key statistics", "how many shares exist, shares sold short, valuation"),
@@ -160,21 +217,27 @@
         L("https://www.google.com/search?tbm=nws&q=" + encodeURIComponent(m.s + " stock"), "News search", "what is being written about it right now"))));
     return panel;
   }
-  function bmChart(H, m) {
-    const n = H.d.length, W = 600, Ht = 176, L = 36, R = 8, Tp = 8, VH = 44, axis = 16, top = Ht - axis - VH - 8;
-    const lo = Math.min(...H.l), hi = Math.max(...H.h), span = hi - lo || 1, vmax = Math.max(...H.v) || 1;
-    const X = i => L + i / Math.max(n - 1, 1) * (W - L - R), Y = v => Tp + (1 - (v - lo) / span) * (top - Tp), bw = Math.max((W - L - R) / n * 0.7, 1.5);
+  function bmChart(H, m, x) {
+    const n = H.d.length, W = 600, Ht = 190, L = 54, R = 8, Tp = 10, VH = 46, axis = 16, top = Ht - axis - VH - 8, halo = "paint-order:stroke;stroke:var(--surface);stroke-width:3px";
+    const lo = Math.min(...H.l, m.last != null ? m.last : Infinity), hi = Math.max(...H.h, m.last != null ? m.last : -Infinity), span = hi - lo || 1, avgV = m.avgVol || 0, vmax = Math.max(...H.v, avgV) || 1;
+    const X = i => L + i / Math.max(n - 1, 1) * (W - L - R), Y = v => Tp + (1 - (v - lo) / span) * (top - Tp), bw = Math.max((W - L - R) / n * 0.7, 1.5), VY = v => Ht - axis - Math.max(v / vmax * VH, 0);
     const line = H.c.map((v, i) => X(i).toFixed(1) + "," + Y(v).toFixed(1)).join(" ");
     const vol = H.v.map((v, i) => { const hh = Math.max(v / vmax * VH, v ? 1 : 0), up = i === 0 || H.c[i] >= H.c[i - 1];
       return `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${(Ht - axis - hh).toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" fill="${up ? "#1f7a4d" : "#c0392b"}" opacity=".55"/>`; }).join("");
     const tick = (i, anchor) => `<text x="${X(i).toFixed(1)}" y="${Ht - 3}" font-size="9" fill="currentColor" opacity=".55" text-anchor="${anchor}">${shortDay(H.d[i])}</text>`;
-    const mid = Math.floor((n - 1) / 2);
+    const note = (i, text, above) => { const a = i < n * 0.2 ? "start" : i > n * 0.8 ? "end" : "middle"; return `<text x="${X(i).toFixed(1)}" y="${(Y(H.c[i]) + (above ? -7 : 13)).toFixed(1)}" font-size="9" fill="currentColor" opacity=".8" text-anchor="${a}" style="${halo}">${text}</text><circle cx="${X(i).toFixed(1)}" cy="${Y(H.c[i]).toFixed(1)}" r="2.6" fill="var(--surface)" stroke="currentColor" stroke-width="1.2"/>`; };
+    const yAvg = Y(x.sma20), yNow = m.last != null ? Y(m.last) : null, closeLabels = Math.abs(yAvg - (yNow == null ? -99 : yNow)) < 11;
+    const ref = `<line x1="${L}" x2="${W - R}" y1="${yAvg.toFixed(1)}" y2="${yAvg.toFixed(1)}" stroke="currentColor" opacity=".4" stroke-dasharray="4 3"/>` +
+      `<text x="${L + 3}" y="${(yAvg + (closeLabels && yAvg > yNow ? 10 : -3)).toFixed(1)}" font-size="9" fill="currentColor" opacity=".75" style="${halo}">20-session average ${px(x.sma20)}</text>` +
+      (yNow == null ? "" : `<line x1="${L}" x2="${W - R}" y1="${yNow.toFixed(1)}" y2="${yNow.toFixed(1)}" stroke="#2d6cdf" opacity=".8" stroke-dasharray="2 3"/><text x="${W - R - 2}" y="${(yNow + (closeLabels && yNow > yAvg ? 10 : -3)).toFixed(1)}" font-size="9" fill="#2d6cdf" text-anchor="end" style="${halo}">this morning ${px(m.last)} (premarket)</text>`);
+    const volRef = avgV ? `<line x1="${L}" x2="${W - R}" y1="${VY(avgV).toFixed(1)}" y2="${VY(avgV).toFixed(1)}" stroke="currentColor" opacity=".45" stroke-dasharray="4 3"/><text x="${L - 4}" y="${(VY(avgV) + 3).toFixed(1)}" font-size="9" fill="currentColor" opacity=".7" text-anchor="end">usual ${big(avgV)}</text>` : "";
     const svgText = `<svg viewBox="0 0 ${W} ${Ht}" width="100%" style="max-width:${W}px;height:auto;cursor:crosshair" role="img" aria-label="Closing price and volume, last ${n} sessions">` +
       `<text x="${L - 4}" y="${Tp + 8}" font-size="9" fill="currentColor" opacity=".6" text-anchor="end">${px(hi)}</text><text x="${L - 4}" y="${top}" font-size="9" fill="currentColor" opacity=".6" text-anchor="end">${px(lo)}</text>` +
       `<line x1="${L}" x2="${W - R}" y1="${top + 4}" y2="${top + 4}" stroke="currentColor" opacity=".15"/>` +
-      `<rect class="bm-band" y="${Tp}" height="${Ht - axis - Tp}" fill="currentColor" opacity=".07" style="display:none"/>` + vol +
+      `<rect class="bm-band" y="${Tp}" height="${Ht - axis - Tp}" fill="currentColor" opacity=".07" style="display:none"/>` + vol + volRef + ref +
       `<polyline points="${line}" fill="none" stroke="#1f7a4d" stroke-width="1.8"/><circle cx="${X(n - 1).toFixed(1)}" cy="${Y(H.c[n - 1]).toFixed(1)}" r="3" fill="#1f7a4d"/>` +
-      tick(0, "start") + tick(mid, "middle") + tick(n - 1, "end") + `<circle class="bm-dot" r="3.5" fill="#1f7a4d" style="display:none"/></svg>`;
+      (x.hiI !== n - 1 ? note(x.hiI, "high " + px(H.c[x.hiI]), true) : "") + (x.loI !== n - 1 && x.loI !== x.hiI ? note(x.loI, "low " + px(H.c[x.loI]), false) : "") +
+      tick(0, "start") + tick(Math.floor((n - 1) / 2), "middle") + tick(n - 1, "end") + `<circle class="bm-dot" r="3.5" fill="#1f7a4d" style="display:none"/></svg>`;
     const box = h("div", { class: "pl" });
     box.innerHTML = svgText;
     const svg = box.querySelector("svg"), band = svg.querySelector(".bm-band"), dot = svg.querySelector(".bm-dot"), tip = h("div", { class: "pl-tip" });
@@ -189,10 +252,12 @@
       dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(H.c[i])); dot.style.display = "";
       tip.replaceChildren(h("div", { style: "font-weight:650", text: dayLabel(H.d[i]) }),
         h("div", { text: "Close " + px(H.c[i]) + (chg == null ? "" : " (" + pct(chg, 1) + " on the day)") }),
-        h("div", { class: "sub", style: "margin:0", text: "Range " + px(H.l[i]) + " to " + px(H.h[i]) + " · " + big(H.v[i]) + " shares" + (m.avgVol ? " (" + (H.v[i] / m.avgVol >= 10 ? fmt(Math.round(H.v[i] / m.avgVol)) : (H.v[i] / m.avgVol).toFixed(1)) + "× usual)" : "") }));
+        h("div", { class: "sub", style: "margin:0", text: "Range " + px(H.l[i]) + " to " + px(H.h[i]) }),
+        h("div", { class: "sub", style: "margin:0", text: big(H.v[i]) + " shares" + (m.avgVol ? " (" + (H.v[i] / m.avgVol >= 10 ? fmt(Math.round(H.v[i] / m.avgVol)) : (H.v[i] / m.avgVol).toFixed(1)) + "× usual)" : "") }),
+        m.last != null ? h("div", { class: "sub", style: "margin:0", text: "This morning's " + px(m.last) + " is " + pct(m.last / H.c[i] - 1, 0) + " from this close" }) : null);
       tip.hidden = false;
-      const br = box.getBoundingClientRect(), x = ev.clientX - br.left;
-      tip.style.left = (x > br.width / 2 ? Math.max(0, x - tip.offsetWidth - 14) : x + 14) + "px";
+      const br = box.getBoundingClientRect(), px_ = ev.clientX - br.left;
+      tip.style.left = (px_ > br.width / 2 ? Math.max(0, px_ - tip.offsetWidth - 14) : px_ + 14) + "px";
     };
     svg.addEventListener("pointermove", show); svg.addEventListener("pointerdown", show); svg.addEventListener("pointerleave", hide);
     return box;
@@ -278,7 +343,7 @@
   .bm-btn:hover b,.bm-btn:focus-visible b{text-decoration:underline}
   .bm-chev{display:inline-block;width:1.1em;color:var(--s1);font-size:13px} .bm-hint{color:var(--s1);font-size:12px;font-weight:650;background:var(--wash);border-radius:999px;padding:1px 9px;margin-left:4px;white-space:nowrap}
   .bm-panel{margin:8px 0 10px -18px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
-  .bm-grid{margin-top:10px} .bm-links{margin:4px 0 0;padding-left:18px} .bm-links li{margin:2px 0}
+  .bm-h{margin:14px 0 4px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)} .bm-grid{margin-top:2px} .bm-links{margin:4px 0 0;padding-left:18px} .bm-links li{margin:2px 0}
   li.bm{list-style:none;margin-left:-18px}
   .pl{position:relative}
   .pl-tip{position:absolute;top:0;z-index:4;pointer-events:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;line-height:1.4;box-shadow:0 4px 14px rgba(0,0,0,.18);white-space:nowrap}

@@ -708,6 +708,138 @@
     if (!iso || isNaN(Date.parse(iso))) return "–";
     return new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" }) + " Seattle time";
   }
+  const flkrN = v => (typeof v === "number" && isFinite(v) ? v : null);
+  function flkrStat(label, value, subText) {
+    return h("div", {}, h("div", { class: "sub", style: "margin:0", text: label }), h("div", { style: "font-weight:600", text: value }), subText ? h("div", { class: "sub", style: "margin:0", text: subText }) : null);
+  }
+  function flkrStats(d, price) {
+    const day = d.day || {}, close = d.close || {}, year = d.year || {}, overnight = d.overnight || {};
+    const stats = [];
+    if (flkrN(close.price) != null && close.date) stats.push(flkrStat("Previous close", px(close.price), dayLabel(close.date)));
+    if (flkrN(day.open) != null) stats.push(flkrStat("Open", px(day.open), day.partial ? "today so far" : dayLabel(day.date)));
+    if (flkrN(day.low) != null && flkrN(day.high) != null) stats.push(flkrStat("Day's range", px(day.low) + " – " + px(day.high), day.partial ? "today so far" : dayLabel(day.date)));
+    if (flkrN(day.volume) != null) stats.push(flkrStat("Shares traded", fmt(day.volume), day.partial ? "today so far" : dayLabel(day.date)));
+    if (flkrN(year.avgVolume30) != null) stats.push(flkrStat("Usual daily shares", fmt(year.avgVolume30), "average of the last 30 sessions"));
+    if (flkrN(year.low) != null && flkrN(year.high) != null) stats.push(flkrStat("52-week range", px(year.low) + " – " + px(year.high), "high " + dayLabel(year.highDate) + ", low " + dayLabel(year.lowDate)));
+    if (price != null && flkrN(year.high) != null && year.high > 0) stats.push(h("div", {}, h("div", { class: "sub", style: "margin:0", text: "Below the 52-week high" }), h("div", { style: "font-weight:600" }, tint(price / year.high - 1, 1)), h("div", { class: "sub", style: "margin:0", text: "from " + px(year.high) })));
+    if (typeof d.exchange === "string") stats.push(flkrStat("Exchange", d.exchange, null));
+    if (flkrN(overnight.bid) != null && flkrN(overnight.ask) != null && flkrN(overnight.mid) != null && overnight.mid > 0) stats.push(flkrStat("Overnight bid–ask gap", pct((overnight.ask - overnight.bid) / overnight.mid, 1), "of the midpoint; the wider, the thinner the trading"));
+    if (!stats.length) return null;
+    const grid = h("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 18px" }, ...stats);
+    return h("div", {}, h("h3", { text: "Key numbers", style: "margin:14px 0 6px;font-size:13px" }), grid);
+  }
+  function flkrExtended(d) {
+    if (!Array.isArray(d.extended) || !d.extended.length) return null;
+    const rows = d.extended.slice(0, 4).map(e => {
+      const change = flkrN(e.change);
+      return [two(e.session, dayLabel(e.date)), px(flkrN(e.low)) + " – " + px(flkrN(e.high)), px(flkrN(e.last)), (change == null ? "–" : tint(change / 100, 2)), flkrN(e.volume) == null ? "–" : fmt(e.volume)];
+    });
+    return h("div", {}, h("h3", { text: "Premarket and after hours", style: "margin:16px 0 4px;font-size:13px" }),
+      h("p", { class: "sub", text: "Premarket is 1:00 to 6:30 AM Seattle time and after hours is 1:00 to 5:00 PM. Few shares trade then, so one trade can move the price a lot." }),
+      table(["Session", "Range", "Last price", "Change from the close", "Shares"], rows, [1, 2, 3, 4]),
+      h("p", { class: "sub", text: "Premarket change is from the previous day's close; after-hours change is from that day's close." }));
+  }
+  function flkrKorea() {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", weekday: "short", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(now).reduce((a, x) => (a[x.type] = x.value, a), {});
+    const weekday = parts.weekday, hour = parts.hour === "24" ? 0 : +parts.hour, minute = +parts.minute;
+    const mins = hour * 60 + minute;
+    const weekend = weekday === "Sat" || weekday === "Sun";
+    const open = !weekend && mins >= 540 && mins < 930;
+    const date = now.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+    const opensAt = new Date(date + "T09:00:00+09:00"), closesAt = new Date(date + "T15:30:00+09:00");
+    const openStr = opensAt.toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" });
+    const closeStr = closesAt.toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" });
+    const text = "South Korea's stock market is " + (open ? "open now" : "closed now") + ". It trades 9:00 AM to 3:30 PM Seoul time, which is " + openStr + " to " + closeStr + " Seattle time. The fund holds South Korean stocks, so its overnight price tends to follow how they trade in Seoul. Korean holidays are not accounted for.";
+    return h("p", { class: "sub", text });
+  }
+  let flkrRange = "d1";
+  function flkrChart(d) {
+    const series = {};
+    for (const k of ["d1", "d5", "m1"]) {
+      const raw = d.chart && d.chart[k];
+      if (!raw || !Array.isArray(raw.points)) continue;
+      const pts = raw.points.map(p => {
+        if (!Array.isArray(p)) return null;
+        const t = flkrN(p[0]), price = flkrN(p[1]);
+        if (t == null || price == null) return null;
+        return [t, price, p[2] ? 1 : 0];
+      }).filter(Boolean);
+      if (pts.length >= 2) series[k] = { points: pts, ref: flkrN(raw.ref), label: raw.label };
+    }
+    const keys = Object.keys(series);
+    if (!keys.length) return null;
+    if (!series[flkrRange]) flkrRange = keys[0];
+    const W = 640, H = 200, L = 8, R = 52, Tp = 10, B = 22;
+    const cur = series[flkrRange], n = cur.points.length;
+    const ys = cur.points.map(p => p[1]).concat(cur.ref != null ? [cur.ref] : []);
+    let lo = Math.min(...ys), hi = Math.max(...ys);
+    if (lo === hi) { lo -= 0.5; hi += 0.5; } else { const pad = (hi - lo) * 0.04; lo -= pad; hi += pad; }
+    const X = i => L + (W - L - R) * i / (n - 1), Y = v => Tp + (1 - (v - lo) / (hi - lo)) * (H - Tp - B);
+    const fmtTime = t => new Date(t * 1000).toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" });
+    const fmtDate = t => new Date(t * 1000).toLocaleString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });   // daily bars are stamped at midnight Eastern, which is the same date in UTC
+    const fmtAxis = flkrRange === "m1" ? fmtDate : fmtTime;
+    const runs = [];
+    let run = [0];
+    for (let i = 1; i < n; i++) {
+      if (cur.points[i][2] === cur.points[i - 1][2]) run.push(i);
+      else { runs.push(run); run = [i]; }
+    }
+    runs.push(run);
+    const polylines = runs.map((r, ri) => {
+      const idx = ri < runs.length - 1 ? r.concat([runs[ri + 1][0]]) : r;
+      const pts = idx.map(i => X(i).toFixed(1) + "," + Y(cur.points[i][1]).toFixed(1)).join(" ");
+      const ext = cur.points[r[0]][2] === 1;
+      return `<polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.8"${ext ? ' opacity=".4"' : ""}/>`;
+    }).join("");
+    const refLine = cur.ref == null ? "" :
+      `<line x1="${L}" x2="${W - R}" y1="${Y(cur.ref).toFixed(1)}" y2="${Y(cur.ref).toFixed(1)}" stroke="currentColor" opacity=".35" stroke-dasharray="3 3"/><text x="${L + 2}" y="${(Y(cur.ref) - 4).toFixed(1)}" font-size="10" fill="currentColor" opacity=".7">prev close ${px(cur.ref)}</text>`;
+    const hiP = Math.max(...cur.points.map(p => p[1])), loP = Math.min(...cur.points.map(p => p[1]));
+    const labels = `<text x="${W - R + 4}" y="${(Y(hiP) + 4).toFixed(1)}" font-size="10" fill="currentColor" opacity=".7">${px(hiP)}</text><text x="${W - R + 4}" y="${(Y(loP) + 4).toFixed(1)}" font-size="10" fill="currentColor" opacity=".7">${px(loP)}</text>`;
+    const axis = `<text x="${L}" y="${H - 6}" font-size="10" fill="currentColor" opacity=".7" text-anchor="start">${fmtAxis(cur.points[0][0])}</text><text x="${W - R}" y="${H - 6}" font-size="10" fill="currentColor" opacity=".7" text-anchor="end">${fmtAxis(cur.points[n - 1][0])}</text>`;
+    const svgText = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;height:auto" role="img" aria-label="FLKR price chart">` + refLine + polylines + labels + axis +
+      `<line class="flkr-cur" y1="${Tp}" y2="${H - B}" stroke="currentColor" opacity=".6" style="display:none"/><circle class="flkr-dot" r="3" fill="currentColor" style="display:none"/></svg>`;
+    const wrap = h("div", { style: "position:relative" });
+    wrap.innerHTML = svgText;
+    const svg = wrap.querySelector("svg"), curLine = svg.querySelector(".flkr-cur"), dot = svg.querySelector(".flkr-dot"), tip = h("div", { class: "pl-tip" });
+    tip.hidden = true;
+    wrap.append(tip);
+    const hide = () => { tip.hidden = true; curLine.style.display = dot.style.display = "none"; };
+    const show = ev => {
+      const r = svg.getBoundingClientRect(), vx = (ev.clientX - r.left) / r.width * W;
+      if (vx < L - 4 || vx > W - R + 4) return hide();
+      const i = Math.min(Math.max(Math.round((vx - L) / (W - L - R) * (n - 1)), 0), n - 1), p = cur.points[i];
+      curLine.setAttribute("x1", X(i)); curLine.setAttribute("x2", X(i)); curLine.style.display = "";
+      dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(p[1])); dot.style.display = "";
+      const lines = [h("div", { style: "font-weight:650", text: px(p[1]) })];
+      if (flkrRange === "m1") lines.push(h("div", { text: fmtDate(p[0]) }));
+      else {
+        const ny = new Date(p[0] * 1000).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: false });
+        const hm = +ny.split(":")[0] * 60 + +ny.split(":")[1].replace(/\D/g, "");
+        const part = hm < 570 ? "premarket" : hm >= 960 ? "after hours" : "regular session";
+        lines.push(h("div", { text: fmtTime(p[0]) + " · " + part }));
+      }
+      tip.replaceChildren(...lines);
+      tip.hidden = false;
+      const br = wrap.getBoundingClientRect(), px_ = ev.clientX - br.left;
+      tip.style.left = (px_ > br.width / 2 ? Math.max(0, px_ - tip.offsetWidth - 14) : px_ + 14) + "px";
+    };
+    svg.addEventListener("pointermove", show); svg.addEventListener("pointerdown", show); svg.addEventListener("pointerleave", hide);
+    const btnStyle = active => "border:1px solid var(--border);border-radius:999px;padding:3px 12px;background:" + (active ? "var(--pill)" : "transparent") + ";color:inherit;font:inherit;font-size:12.5px;font-weight:" + (active ? "650" : "400") + ";cursor:pointer;margin-right:6px";
+    const btns = h("div", { style: "margin-bottom:6px" });
+    const redraw = () => {
+      const nb = flkrChart(d);
+      if (nb) FLKR.el.querySelector(".flkr-chart").replaceWith(nb);
+    };
+    const order = [["d1", "Last session"], ["d5", "5 days"], ["m1", "1 month"]];
+    for (const [k, label] of order) {
+      if (!series[k]) continue;
+      btns.append(h("button", { type: "button", text: label, style: btnStyle(k === flkrRange), onclick: () => { flkrRange = k; redraw(); } }));
+    }
+    const notes = { d1: "One point per 5 minutes that had trades, from premarket through after hours; the faded part of the line is premarket and after hours, and the dashed line is the previous close. Quiet stretches are skipped.", d5: "The last 5 trading days, one point per 5 minutes that had trades. Days are placed side by side, so the overnight gaps are removed.", m1: "Daily closing prices over the last month." };
+    const box = h("div", { class: "flkr-chart", style: "margin-top:12px;position:relative" }, btns, wrap, h("p", { class: "sub", text: notes[flkrRange] }));
+    return box;
+  }
   function paintFlkr() {
     if (!FLKR.el) return;
     const d = FLKR.data;
@@ -728,6 +860,10 @@
         h("span", { style: "font-size:16px" }, ratio == null ? "" : tint(ratio, 2))),
       h("div", { class: "sub", style: "margin:0", text: useNight ? "Overnight · indicative midpoint · change from the regular close" : (d.last ? d.last.session + " · last trade" : "No trade yet") + (ratio == null ? "" : " · change from the regular close") })
     ];
+    kids.push(flkrChart(d) || h("div"));
+    const st = flkrStats(d, price); if (st) kids.push(st);
+    const ex = flkrExtended(d); if (ex) kids.push(ex);
+    kids.push(flkrKorea());
     if (useNight) kids.push(h("p", { class: "sub", text: "Midpoint of the live bid " + px(d.overnight.bid) + " and ask " + px(d.overnight.ask) + " at " + flkrWhen(d.overnight.time) + ". A wide gap between them means almost no one is trading it, so treat this as a rough guide, not a price you could trade at." }));
     if (d.last) kids.push(h("p", { class: "sub", text: "Last trade " + px(d.last.price) + " at " + flkrWhen(d.last.time) + " (" + d.last.session + ")." }));
     if (d.close) kids.push(h("p", { class: "sub", text: "Regular close " + px(d.close.price) + ", " + dayLabel(d.close.date) + "." }));

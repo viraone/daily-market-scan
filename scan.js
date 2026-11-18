@@ -783,6 +783,7 @@
 .fk-chip.warn{background:color-mix(in srgb,#d99a1c 16%,transparent);border-color:color-mix(in srgb,#d99a1c 45%,transparent);color:var(--ink)}
 .fk-fine{margin:9px 0 0;font-size:11.5px;color:var(--muted);line-height:1.5}
 @media (max-width:820px){.fk-body{grid-template-columns:minmax(0,1fr)}.fk-price{font-size:40px}.fk{padding:16px 14px 14px}.fk-nrow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fk-est{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--ink2);background:var(--wash)}
 @media (prefers-reduced-motion:reduce){.fk-state.live .fk-dot,.fk-halo{animation:none}}
 `;
   function flkrCss() {
@@ -979,6 +980,18 @@
     return box;
   }
 
+  function flkrEstimate(d, est, o) {
+    const cell = (label, value) => h("div", {}, h("small", { text: label }), h("b", { text: value }));
+    const paras = [];
+    if (d.last && flkrN(d.last.price) != null) paras.push(h("p", { text: "FLKR's own last trade was " + px(d.last.price) + " at " + flkrWhen(d.last.time) + "." }));
+    paras.push(h("p", { text: String(est.name || est.symbol) + " (" + est.symbol + ") holds the same kind of South Korean stocks and trades through the night. " + (flkrN(est.correlation) != null && flkrN(est.sessions) != null ? "Over the last " + est.sessions + " sessions the daily moves of the two lined up almost exactly (correlation " + est.correlation.toFixed(3) + (flkrN(est.gapPct) != null ? ", typically within " + est.gapPct.toFixed(2) + "% of each other a day" : "") + "). " : "") + "The estimate applies " + est.symbol + "'s move since its close to FLKR's close. It is not a price you could trade at." }));
+    if (o && flkrN(o.bid) != null && flkrN(o.ask) != null) paras.push(h("p", { text: "The overnight venue's own bid and ask for FLKR is " + px(o.bid) + " to " + px(o.ask) + ", too wide to use." }));
+    return h("div", { class: "fk-night" },
+      h("p", { class: "fk-night-t", text: "Estimated, not a trade" }),
+      h("div", { class: "fk-nrow" }, cell(est.symbol + " now", px(flkrN(est.proxyPrice))), cell(est.symbol + " close", px(flkrN(est.proxyClose))), cell(est.symbol + " move", flkrN(est.proxyMovePct) == null ? "–" : pct(est.proxyMovePct / 100, 2)), cell("FLKR estimate", px(flkrN(est.price)))),
+      ...paras);
+  }
+
   function paintFlkr() {
     if (!FLKR.el) return;
     const d = FLKR.data;
@@ -986,8 +999,11 @@
       FLKR.el.replaceChildren(h("p", { class: "fk-sub", text: FLKR.failed ? "FLKR price is not available right now." : "Loading the FLKR price…" }));
       return;
     }
-    const night = d.overnight && flkrN(d.overnight.mid) != null && (!d.last || Date.parse(d.overnight.time) > Date.parse(d.last.time)) ? d.overnight : null;
-    const price = flkrN(night ? night.mid : (d.last ? d.last.price : null));
+    // the headline is FLKR's own last trade, unless EWY (a sister South Korea fund that trades overnight) has traded 30+ minutes after it
+    const est = d.estimate && typeof d.estimate.symbol === "string" && flkrN(d.estimate.price) != null && !isNaN(Date.parse(d.estimate.time)) ? d.estimate : null;
+    const useEst = !!est && (!d.last || Date.parse(est.time) > Date.parse(d.last.time) + 30 * 60000);
+    const night = !useEst && d.overnight && flkrN(d.overnight.mid) != null && (!d.last || Date.parse(d.overnight.time) > Date.parse(d.last.time)) ? d.overnight : null;
+    const price = flkrN(useEst ? est.price : night ? night.mid : (d.last ? d.last.price : null));
     const close = d.close ? flkrN(d.close.price) : null;
     const ratio = price != null && close ? (price - close) / close : null;
     const [cls, chipText] = flkrDelta(ratio, ratio == null ? null : price - close);
@@ -996,10 +1012,10 @@
       h("div", { class: "fk-id" }, h("span", { class: "fk-sym", text: String(d.symbol || "FLKR") }), h("span", { class: "fk-name", text: String(d.name || "") }), typeof d.exchange === "string" ? h("span", { class: "fk-ex", text: d.exchange }) : null),
       h("span", { class: "fk-state " + state }, h("i", { class: "fk-dot" }), String(d.session || "")));
     const main = h("div", { class: "fk-main" },
-      h("div", { class: "fk-hero" }, h("div", { class: "fk-price", text: px(price) }), ratio == null ? null : h("span", { class: "fk-chg " + cls, text: chipText })),
-      h("p", { class: "fk-sub", text: night ? "Overnight · indicative midpoint of the live bid and ask" : (d.last ? d.last.session + " · last trade " + flkrWhen(d.last.time) : "No trade yet") }),
+      h("div", { class: "fk-hero" }, h("div", { class: "fk-price", text: px(price) }), ratio == null ? null : h("span", { class: "fk-chg " + cls, text: chipText }), useEst ? h("span", { class: "fk-est", title: "Estimated from " + est.symbol + "'s trades, not a FLKR trade", text: "Estimate" }) : null),
+      h("p", { class: "fk-sub", text: useEst ? "Estimated from " + est.symbol + "'s latest " + String(est.session || "").toLowerCase() + " trade · " + flkrWhen(est.time) : night ? "Overnight · indicative midpoint of the live bid and ask" : (d.last ? d.last.session + " · last trade " + flkrWhen(d.last.time) : "No trade yet") }),
       close != null ? h("p", { class: "fk-sub fk-muted", text: "Change is from the regular close of " + px(close) + (d.close.date ? ", " + dayLabel(d.close.date) : "") }) : null);
-    const nightBox = night ? flkrNight(night) : null;
+    const nightBox = useEst ? flkrEstimate(d, est, d.overnight) : (night ? flkrNight(night) : null);
     if (nightBox) main.append(nightBox);
     const chart = flkrChart(d);
     if (chart) main.append(chart);

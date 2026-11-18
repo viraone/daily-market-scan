@@ -703,6 +703,63 @@
     if (!LIVE.hooked) { LIVE.hooked = true; document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLive(); }); }
   }
 
+  const FLKR = { url: PUBLIC ? "https://raw.githubusercontent.com/viraone/daily-market-scan/quotes/flkr.json" : "flkr.json", timer: null, el: null, data: null, failed: false, hooked: false };
+  function flkrWhen(iso) {
+    if (!iso || isNaN(Date.parse(iso))) return "–";
+    return new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" }) + " Seattle time";
+  }
+  function paintFlkr() {
+    if (!FLKR.el) return;
+    const d = FLKR.data;
+    if (!d || typeof d !== "object") {
+      FLKR.el.replaceChildren(h("p", { class: "sub", text: FLKR.failed ? "FLKR price is not available right now." : "Loading the FLKR price…" }));
+      return;
+    }
+    const useNight = d.overnight && d.overnight.mid != null && (!d.last || Date.parse(d.overnight.time) > Date.parse(d.last.time));
+    const price = useNight ? d.overnight.mid : (d.last ? d.last.price : null);
+    const ratio = (price != null && d.close && d.close.price) ? (price - d.close.price) / d.close.price : null;
+    const kids = [
+      h("div", { style: "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap" },
+        h("strong", { text: d.symbol, style: "font-size:15px" }),
+        h("span", { class: "sub", style: "margin:0", text: d.name }),
+        h("span", { class: "pill", text: d.session })),
+      h("div", { style: "font-size:30px;font-weight:650;margin-top:6px" },
+        px(price) + " ",
+        h("span", { style: "font-size:16px" }, ratio == null ? "" : tint(ratio, 2))),
+      h("div", { class: "sub", style: "margin:0", text: useNight ? "Overnight · indicative midpoint · change from the regular close" : (d.last ? d.last.session + " · last trade" : "No trade yet") + (ratio == null ? "" : " · change from the regular close") })
+    ];
+    if (useNight) kids.push(h("p", { class: "sub", text: "Midpoint of the live bid " + px(d.overnight.bid) + " and ask " + px(d.overnight.ask) + " at " + flkrWhen(d.overnight.time) + ". A wide gap between them means almost no one is trading it, so treat this as a rough guide, not a price you could trade at." }));
+    if (d.last) kids.push(h("p", { class: "sub", text: "Last trade " + px(d.last.price) + " at " + flkrWhen(d.last.time) + " (" + d.last.session + ")." }));
+    if (d.close) kids.push(h("p", { class: "sub", text: "Regular close " + px(d.close.price) + ", " + dayLabel(d.close.date) + "." }));
+    let upd = "Updated " + flkrWhen(d.builtAt) + " · trades are " + (d.delayMinutes || 15) + " minutes behind · this strip refreshes every minute.";
+    if (Date.now() - Date.parse(d.builtAt) > 20 * 60000) upd += " · The newest update is more than 20 minutes old, so the updater may be off.";
+    if (FLKR.failed) upd += " · The last refresh failed; showing the previous numbers.";
+    kids.push(h("p", { class: "sub", text: upd }));
+    FLKR.el.replaceChildren(...kids);
+  }
+  async function pollFlkr() {
+    if (document.hidden) return;
+    try {
+      const r = await fetch(FLKR.url + "?t=" + Date.now(), { cache: "no-store" });
+      if (!r.ok) throw new Error("status " + r.status);
+      FLKR.data = await r.json();
+      FLKR.failed = false;
+    } catch (err) { FLKR.failed = true; }
+    paintFlkr();
+  }
+  function flkrBox() {
+    if (!FLKR.el) FLKR.el = h("div", { class: "card", id: "sc-flkr", style: "margin-bottom:14px" });
+    paintFlkr();
+    clearInterval(FLKR.timer);
+    FLKR.timer = setInterval(pollFlkr, 60000);
+    pollFlkr();
+    if (!FLKR.hooked) {
+      FLKR.hooked = true;
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) pollFlkr(); });
+    }
+    return FLKR.el;
+  }
+
   function draw() {
     const d = S.data, p = d.premarket, lv = d.levels, ins = d.insiders, body = $("#sc-body");
     body.replaceChildren();
@@ -760,6 +817,7 @@
     const ld = lastDayCard(d);
     if (ld) body.prepend(ld);
     if (!PUBLIC) body.prepend(liveBar());
+    body.prepend(flkrBox());
     body.append(h("p", { class: "sub", text: "Limits: Alpaca's free feed leaves out the newest 15 minutes and some thin stocks; headlines come from one feed (Benzinga) and miss small-company filings, trading halts and social media; a split-adjusted history cannot see every spin-off. A headline near a move is a lead, not proof of the reason. This page is a record, not a recommendation." }));
     startLive();
   }

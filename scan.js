@@ -703,11 +703,15 @@
     if (!LIVE.hooked) { LIVE.hooked = true; document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLive(); }); }
   }
 
-  /* ---- FLKR card: the price at the top of the scan page. Reads flkr.json (see tools/flkr_quote.py, tools/publish_flkr.py). ---- */
-  const FLKR = { url: PUBLIC ? "https://raw.githubusercontent.com/viraone/daily-market-scan/quotes/flkr.json" : "flkr.json", timer: null, el: null, data: null, failed: false, hooked: false, range: "d1", gid: 0 };
+  /* ---- Price cards at the top of the scan page, side by side: one per stock in QUOTES. Each reads its own file (see tools/flkr_quote.py, tools/publish_flkr.py).
+     To add a stock: add it to SYMBOLS in tools/flkr_quote.py and QUOTES in tools/publish_flkr.py, then add a line here. korea: the fund follows the Seoul market. ---- */
+  const QUOTE_BASE = PUBLIC ? "https://raw.githubusercontent.com/viraone/daily-market-scan/quotes/" : "";
+  const QUOTES = [{ sym: "FLKR", file: "flkr.json", korea: true }, { sym: "SOFI", file: "sofi.json" }].map(q => Object.assign(q, { el: null, data: null, failed: false, range: "d1" }));
+  const FK = { timer: null, hooked: false, gid: 0, row: null };
   const flkrN = v => (typeof v === "number" && isFinite(v) ? v : null);
   const FLKR_CSS = `
-.fk{padding:20px 22px 16px;border-radius:14px;overflow:hidden}
+.fk-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:14px;margin-bottom:14px}
+.fk{padding:20px 22px 16px;border-radius:14px;overflow:hidden;container-type:inline-size}
 .fk > header.fk-head{display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;margin:0}
 .fk-id{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
 .fk-sym{font-size:15px;font-weight:750;letter-spacing:.05em}
@@ -783,6 +787,8 @@
 .fk-chip.warn{background:color-mix(in srgb,#d99a1c 16%,transparent);border-color:color-mix(in srgb,#d99a1c 45%,transparent);color:var(--ink)}
 .fk-fine{margin:9px 0 0;font-size:11.5px;color:var(--muted);line-height:1.5}
 @media (max-width:820px){.fk-body{grid-template-columns:minmax(0,1fr)}.fk-price{font-size:40px}.fk{padding:16px 14px 14px}.fk-nrow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container (max-width:760px){.fk-body{grid-template-columns:minmax(0,1fr)}}
+@container (max-width:480px){.fk-price{font-size:40px}.fk-nrow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fk-est{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--ink2);background:var(--wash)}
 @media (prefers-reduced-motion:reduce){.fk-state.live .fk-dot,.fk-halo{animation:none}}
 `;
@@ -877,37 +883,39 @@
     const f = iso => new Date(iso).toLocaleString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", hour: "numeric", minute: "2-digit" });
     return { open: !weekend && mins >= 540 && mins < 930, openStr: f(date + "T09:00:00+09:00"), closeStr: f(date + "T15:30:00+09:00") };
   }
-  function flkrFoot(d) {
-    const k = flkrKorea();
+  function flkrFoot(q, d) {
+    const k = q.korea ? flkrKorea() : null;
     const stale = Date.now() - Date.parse(d.builtAt) > 20 * 60000;
     return h("footer", { class: "fk-footer" },
       h("div", { class: "fk-foot" },
-        h("span", { class: "fk-chip" }, h("i", { class: "fk-dot" + (k.open ? " on" : "") }), "Seoul market " + (k.open ? "open" : "closed")),
+        k ? h("span", { class: "fk-chip" }, h("i", { class: "fk-dot" + (k.open ? " on" : "") }), "Seoul market " + (k.open ? "open" : "closed")) : null,
         h("span", { text: "Updated " + flkrWhen(d.builtAt) }),
         h("span", { text: "Trades " + (d.delayMinutes || 15) + " min behind · refreshes every minute" }),
         stale ? h("span", { class: "fk-chip warn", text: "Updater may be off: the newest update is over 20 minutes old" }) : null,
-        FLKR.failed ? h("span", { class: "fk-chip warn", text: "Last refresh failed; showing the previous numbers" }) : null),
-      h("p", { class: "fk-fine", text: "Seoul trades 9:00 AM to 3:30 PM Seoul time, which is " + k.openStr + " to " + k.closeStr + " Seattle time. The fund holds South Korean stocks, so its overnight price tends to follow how they trade there. Korean holidays are not accounted for. A record of prices, not advice." }));
+        q.failed ? h("span", { class: "fk-chip warn", text: "Last refresh failed; showing the previous numbers" }) : null),
+      h("p", { class: "fk-fine", text: k ? "Seoul trades 9:00 AM to 3:30 PM Seoul time, which is " + k.openStr + " to " + k.closeStr + " Seattle time. The fund holds South Korean stocks, so its overnight price tends to follow how they trade there. Korean holidays are not accounted for. A record of prices, not advice."
+        : "Overnight (5:00 PM to 1:00 AM Seattle time) the price is the stock's own newest trade on the overnight venue, where few shares trade. Market holidays are not accounted for. A record of prices, not advice." }));
   }
 
-  function flkrChartParts(series, keys, redraw) {
+  function flkrChartParts(q, series, keys, redraw, width) {
     const names = { d1: "Last session", d5: "5 days", m1: "1 month" };
     const notes = { d1: "One point per 5 minutes that had trades, from premarket through after hours. The faded part of the line is premarket and after hours; the dashed line is the previous close. Quiet stretches are skipped.",
       d5: "The last 5 trading days, one point per 5 minutes that had trades. Days sit side by side, so the overnight gaps are removed.", m1: "Daily closing prices over the last month." };
     const seg = h("div", { class: "fk-seg", role: "group", "aria-label": "Chart range" });
-    for (const k of keys) seg.append(h("button", { type: "button", text: names[k], "aria-pressed": String(k === FLKR.range), onclick: () => { FLKR.range = k; redraw(); } }));
+    for (const k of keys) seg.append(h("button", { type: "button", text: names[k], "aria-pressed": String(k === q.range), onclick: () => { q.range = k; redraw(); } }));
     const top = h("div", { class: "fk-chart-top" }, h("h3", { class: "fk-h", text: "Price" }), seg);
 
-    const cur = series[FLKR.range], P = cur.points, n = P.length;
-    const narrow = window.innerWidth < 620;   // a phone gets a smaller canvas so the axis text is not shrunk to nothing
-    const W = narrow ? 380 : 760, H = narrow ? 240 : 250, L = 6, R = narrow ? 54 : 58, Tp = 12, B = 26;
+    const cur = series[q.range], P = cur.points, n = P.length;
+    // the canvas is as wide as the space the chart has (340 to 760), so the axis text is never shrunk or blown up; before the card is on the page the window decides
+    const narrow = width ? width < 520 : window.innerWidth < 620;
+    const W = width ? Math.max(340, Math.min(760, Math.round(width))) : (narrow ? 380 : 760), H = narrow ? 240 : 250, L = 6, R = narrow ? 54 : 58, Tp = 12, B = 26;
     const hiP = Math.max(...P.map(p => p[1])), loP = Math.min(...P.map(p => p[1]));
     const vals = [hiP, loP].concat(cur.ref != null ? [cur.ref] : []);
     let lo = Math.min(...vals), hi = Math.max(...vals);
     if (lo === hi) { lo -= 0.5; hi += 0.5; } else { const pad = (hi - lo) * 0.08; lo -= pad; hi += pad; }
     const X = i => L + (W - L - R) * i / (n - 1), Y = v => Tp + (1 - (v - lo) / (hi - lo)) * (H - Tp - B);
     const col = "var(" + (P[n - 1][1] >= (cur.ref != null ? cur.ref : P[0][1]) ? "--up" : "--down") + ")";
-    const gid = "fkg" + (++FLKR.gid);
+    const gid = "fkg" + (++FK.gid);
     const f1 = v => v.toFixed(1);
     const runs = [];
     let run = [0];
@@ -922,19 +930,19 @@
     const refLine = cur.ref == null ? "" : `<line x1="${L}" x2="${W - R}" y1="${f1(Y(cur.ref))}" y2="${f1(Y(cur.ref))}" stroke="currentColor" opacity=".4" stroke-dasharray="4 4"/><text x="${L + 2}" y="${f1(Y(cur.ref) - 5)}" font-size="11" fill="currentColor" opacity=".6">prev close ${px(cur.ref)}</text>`;
     const yLab = `<text x="${W - R + 8}" y="${f1(Y(hiP) + 4)}" font-size="11" fill="currentColor" opacity=".6">${px(hiP)}</text><text x="${W - R + 8}" y="${f1(Y(loP) + 4)}" font-size="11" fill="currentColor" opacity=".6">${px(loP)}</text>`;
     let xLab = "";
-    if (FLKR.range === "d5") {
+    if (q.range === "d5") {
       for (let i = 0; i < n; i++) {
         if (i === 0 || flkrKey(P[i][0]) !== flkrKey(P[i - 1][0])) {
           xLab += (i ? `<line x1="${f1(X(i))}" x2="${f1(X(i))}" y1="${Tp}" y2="${H - B}" stroke="currentColor" opacity=".12"/>` : "") + `<text x="${f1(X(i) + 4)}" y="${H - 8}" font-size="11" fill="currentColor" opacity=".6">${flkrWeekday(P[i][0])}</text>`;
         }
       }
     } else {
-      const fmtAx = FLKR.range === "m1" ? flkrDay : flkrTime;
+      const fmtAx = q.range === "m1" ? flkrDay : flkrTime;
       xLab = `<text x="${L}" y="${H - 8}" font-size="11" fill="currentColor" opacity=".6">${fmtAx(P[0][0])}</text><text x="${W - R}" y="${H - 8}" font-size="11" fill="currentColor" opacity=".6" text-anchor="end">${fmtAx(P[n - 1][0])}</text>`;
     }
     const ex = f1(X(n - 1)), ey = f1(Y(P[n - 1][1]));
     const endDot = `<circle class="fk-halo" cx="${ex}" cy="${ey}" r="4" style="fill:${col}"/><circle cx="${ex}" cy="${ey}" r="4" stroke="var(--surface)" stroke-width="1.5" style="fill:${col}"/>`;
-    const svgText = `<svg class="fk-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="FLKR price chart"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${col};stop-opacity:.26"/><stop offset="1" style="stop-color:${col};stop-opacity:0"/></linearGradient></defs>` +
+    const svgText = `<svg class="fk-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${q.sym} price chart"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${col};stop-opacity:.26"/><stop offset="1" style="stop-color:${col};stop-opacity:0"/></linearGradient></defs>` +
       grid + area + refLine + lines + yLab + xLab + endDot +
       `<line class="fk-cur" y1="${Tp}" y2="${H - B}" stroke="currentColor" opacity=".35" style="display:none"/><circle class="fk-hdot" r="4.5" stroke="var(--surface)" stroke-width="2" style="fill:${col};display:none"/></svg>`;
     const wrap = h("div", { class: "fk-svgwrap" });
@@ -949,17 +957,17 @@
       const i = Math.min(Math.max(Math.round((vx - L) / (W - L - R) * (n - 1)), 0), n - 1), p = P[i];
       curLine.setAttribute("x1", f1(X(i))); curLine.setAttribute("x2", f1(X(i))); curLine.style.display = "";
       dot.setAttribute("cx", f1(X(i))); dot.setAttribute("cy", f1(Y(p[1]))); dot.style.display = "";
-      const lines2 = [h("b", { text: px(p[1]) }), h("span", { text: FLKR.range === "m1" ? flkrDay(p[0]) : flkrTime(p[0]) + " · " + flkrPart(p[0]) })];
-      if (FLKR.range === "d1" && cur.ref != null) lines2.push(h("div", { text: pct((p[1] - cur.ref) / cur.ref, 2) + " vs the previous close" }));
+      const lines2 = [h("b", { text: px(p[1]) }), h("span", { text: q.range === "m1" ? flkrDay(p[0]) : flkrTime(p[0]) + " · " + flkrPart(p[0]) })];
+      if (q.range === "d1" && cur.ref != null) lines2.push(h("div", { text: pct((p[1] - cur.ref) / cur.ref, 2) + " vs the previous close" }));
       tip.replaceChildren(...lines2);
       tip.hidden = false;
       const br = wrap.getBoundingClientRect(), cx = ev.clientX - br.left;
       tip.style.left = (cx > br.width / 2 ? Math.max(0, cx - tip.offsetWidth - 14) : cx + 14) + "px";
     };
     svg.addEventListener("pointermove", show); svg.addEventListener("pointerdown", show); svg.addEventListener("pointerleave", hide);
-    return [top, wrap, h("p", { class: "fk-note", text: notes[FLKR.range] })];
+    return [top, wrap, h("p", { class: "fk-note", text: notes[q.range] })];
   }
-  function flkrChart(d) {
+  function flkrChart(q, d) {
     const series = {};
     for (const k of ["d1", "d5", "m1"]) {
       const raw = d.chart && d.chart[k];
@@ -973,33 +981,32 @@
     }
     const keys = Object.keys(series);
     if (!keys.length) return null;
-    if (!series[FLKR.range]) FLKR.range = keys[0];
+    if (!series[q.range]) q.range = keys[0];
     const box = h("div", { class: "fk-chart" });
-    const draw = () => box.replaceChildren(...flkrChartParts(series, keys, draw));
-    draw();
+    box.redraw = () => box.replaceChildren(...flkrChartParts(q, series, keys, box.redraw, box.clientWidth));   // drawn by paintQuote once the box is in the card, so it can be measured
     return box;
   }
 
   function flkrEstimate(d, est, o) {
     const cell = (label, value) => h("div", {}, h("small", { text: label }), h("b", { text: value }));
-    const paras = [];
-    if (d.last && flkrN(d.last.price) != null) paras.push(h("p", { text: "FLKR's own last trade was " + px(d.last.price) + " at " + flkrWhen(d.last.time) + "." }));
-    paras.push(h("p", { text: String(est.name || est.symbol) + " (" + est.symbol + ") holds the same kind of South Korean stocks and trades through the night. " + (flkrN(est.correlation) != null && flkrN(est.sessions) != null ? "Over the last " + est.sessions + " sessions the daily moves of the two lined up almost exactly (correlation " + est.correlation.toFixed(3) + (flkrN(est.gapPct) != null ? ", typically within " + est.gapPct.toFixed(2) + "% of each other a day" : "") + "). " : "") + "The estimate applies " + est.symbol + "'s move since its close to FLKR's close. It is not a price you could trade at." }));
-    if (o && flkrN(o.bid) != null && flkrN(o.ask) != null) paras.push(h("p", { text: "The overnight venue's own bid and ask for FLKR is " + px(o.bid) + " to " + px(o.ask) + ", too wide to use." }));
+    const paras = [], sym = String(d.symbol || "");
+    if (d.last && flkrN(d.last.price) != null) paras.push(h("p", { text: sym + "'s own last trade was " + px(d.last.price) + " at " + flkrWhen(d.last.time) + "." }));
+    paras.push(h("p", { text: String(est.name || est.symbol) + " (" + est.symbol + ") holds the same kind of South Korean stocks and trades through the night. " + (flkrN(est.correlation) != null && flkrN(est.sessions) != null ? "Over the last " + est.sessions + " sessions the daily moves of the two lined up almost exactly (correlation " + est.correlation.toFixed(3) + (flkrN(est.gapPct) != null ? ", typically within " + est.gapPct.toFixed(2) + "% of each other a day" : "") + "). " : "") + "The estimate applies " + est.symbol + "'s move since its close to " + sym + "'s close. It is not a price you could trade at." }));
+    if (o && flkrN(o.bid) != null && flkrN(o.ask) != null) paras.push(h("p", { text: "The overnight venue's own bid and ask for " + sym + " is " + px(o.bid) + " to " + px(o.ask) + ", too wide to use." }));
     return h("div", { class: "fk-night" },
       h("p", { class: "fk-night-t", text: "Estimated, not a trade" }),
-      h("div", { class: "fk-nrow" }, cell(est.symbol + " now", px(flkrN(est.proxyPrice))), cell(est.symbol + " close", px(flkrN(est.proxyClose))), cell(est.symbol + " move", flkrN(est.proxyMovePct) == null ? "–" : pct(est.proxyMovePct / 100, 2)), cell("FLKR estimate", px(flkrN(est.price)))),
+      h("div", { class: "fk-nrow" }, cell(est.symbol + " now", px(flkrN(est.proxyPrice))), cell(est.symbol + " close", px(flkrN(est.proxyClose))), cell(est.symbol + " move", flkrN(est.proxyMovePct) == null ? "–" : pct(est.proxyMovePct / 100, 2)), cell(sym + " estimate", px(flkrN(est.price)))),
       ...paras);
   }
 
-  function paintFlkr() {
-    if (!FLKR.el) return;
-    const d = FLKR.data;
+  function paintQuote(q) {
+    if (!q.el) return;
+    const d = q.data;
     if (!d || typeof d !== "object") {
-      FLKR.el.replaceChildren(h("p", { class: "fk-sub", text: FLKR.failed ? "FLKR price is not available right now." : "Loading the FLKR price…" }));
+      q.el.replaceChildren(h("p", { class: "fk-sub", text: q.failed ? q.sym + " price is not available right now." : "Loading the " + q.sym + " price…" }));
       return;
     }
-    // the headline is FLKR's own last trade, unless EWY (a sister South Korea fund that trades overnight) has traded 30+ minutes after it
+    // the headline is the stock's own last trade, unless it has an estimate (FLKR: from EWY, a sister South Korea fund that trades overnight) made 30+ minutes after it
     const est = d.estimate && typeof d.estimate.symbol === "string" && flkrN(d.estimate.price) != null && !isNaN(Date.parse(d.estimate.time)) ? d.estimate : null;
     const useEst = !!est && (!d.last || Date.parse(est.time) > Date.parse(d.last.time) + 30 * 60000);
     const night = !useEst && d.overnight && flkrN(d.overnight.mid) != null && (!d.last || Date.parse(d.overnight.time) > Date.parse(d.last.time)) ? d.overnight : null;
@@ -1009,41 +1016,59 @@
     const [cls, chipText] = flkrDelta(ratio, ratio == null ? null : price - close);
     const state = d.session === "Market open" ? "live" : d.session === "Closed" ? "" : "ext";
     const head = h("header", { class: "fk-head" },
-      h("div", { class: "fk-id" }, h("span", { class: "fk-sym", text: String(d.symbol || "FLKR") }), h("span", { class: "fk-name", text: String(d.name || "") }), typeof d.exchange === "string" ? h("span", { class: "fk-ex", text: d.exchange }) : null),
+      h("div", { class: "fk-id" }, h("span", { class: "fk-sym", text: String(d.symbol || q.sym) }), h("span", { class: "fk-name", text: String(d.name || "") }), typeof d.exchange === "string" ? h("span", { class: "fk-ex", text: d.exchange }) : null),
       h("span", { class: "fk-state " + state }, h("i", { class: "fk-dot" }), String(d.session || "")));
     const main = h("div", { class: "fk-main" },
-      h("div", { class: "fk-hero" }, h("div", { class: "fk-price", text: px(price) }), ratio == null ? null : h("span", { class: "fk-chg " + cls, text: chipText }), useEst ? h("span", { class: "fk-est", title: "Estimated from " + est.symbol + "'s trades, not a FLKR trade", text: "Estimate" }) : null),
+      h("div", { class: "fk-hero" }, h("div", { class: "fk-price", text: px(price) }), ratio == null ? null : h("span", { class: "fk-chg " + cls, text: chipText }), useEst ? h("span", { class: "fk-est", title: "Estimated from " + est.symbol + "'s trades, not a " + q.sym + " trade", text: "Estimate" }) : null),
       h("p", { class: "fk-sub", text: useEst ? "Estimated from " + est.symbol + "'s latest " + String(est.session || "").toLowerCase() + " trade · " + flkrWhen(est.time) : night ? "Overnight · indicative midpoint of the live bid and ask" : (d.last ? d.last.session + " · last trade " + flkrWhen(d.last.time) : "No trade yet") }),
       close != null ? h("p", { class: "fk-sub fk-muted", text: "Change is from the regular close of " + px(close) + (d.close.date ? ", " + dayLabel(d.close.date) : "") }) : null);
     const nightBox = useEst ? flkrEstimate(d, est, d.overnight) : (night ? flkrNight(night) : null);
     if (nightBox) main.append(nightBox);
-    const chart = flkrChart(d);
+    const chart = flkrChart(q, d);
     if (chart) main.append(chart);
     const side = flkrSide(d, price);
-    FLKR.el.replaceChildren(head, h("div", { class: "fk-body" + (side ? "" : " solo") }, main, side), flkrExtended(d), flkrFoot(d));
+    q.el.replaceChildren(head, h("div", { class: "fk-body" + (side ? "" : " solo") }, main, side), flkrExtended(d), flkrFoot(q, d));
+    if (chart) chart.redraw();
   }
-  async function pollFlkr() {
-    if (document.hidden) return;
+  async function pollQuote(q) {
     try {
-      const r = await fetch(FLKR.url + "?t=" + Date.now(), { cache: "no-store" });
+      const r = await fetch(QUOTE_BASE + q.file + "?t=" + Date.now(), { cache: "no-store" });
       if (!r.ok) throw new Error("status " + r.status);
-      FLKR.data = await r.json();
-      FLKR.failed = false;
-    } catch (err) { FLKR.failed = true; }
-    paintFlkr();
+      q.data = await r.json();
+      q.failed = false;
+    } catch (err) { q.failed = true; }
+    paintQuote(q);
   }
-  function flkrBox() {
+  function pollQuotes() {
+    if (document.hidden) return;
+    QUOTES.forEach(pollQuote);
+  }
+  function quotesRow() {
     flkrCss();
-    if (!FLKR.el) FLKR.el = h("div", { class: "card fk", id: "sc-flkr", style: "margin-bottom:14px" });
-    paintFlkr();
-    clearInterval(FLKR.timer);
-    FLKR.timer = setInterval(pollFlkr, 60000);
-    pollFlkr();
-    if (!FLKR.hooked) {
-      FLKR.hooked = true;
-      document.addEventListener("visibilitychange", () => { if (!document.hidden) pollFlkr(); });
+    if (!FK.row) {
+      for (const q of QUOTES) q.el = h("div", { class: "card fk", id: "sc-" + q.sym.toLowerCase() });
+      FK.row = h("div", { class: "fk-row" }, ...QUOTES.map(q => q.el));
+      if (window.ResizeObserver) {   // a chart is drawn for the width it had; when its card changes width (window resized, phone turned), draw it again
+        const ro = new ResizeObserver(entries => {
+          for (const e of entries) {
+            const w = Math.round(e.contentRect.width), chart = e.target.querySelector(".fk-chart");
+            if (e.target.fkWidth === w) continue;
+            e.target.fkWidth = w;
+            if (chart && chart.redraw) requestAnimationFrame(() => { if (chart.isConnected) chart.redraw(); });
+          }
+        });
+        for (const q of QUOTES) ro.observe(q.el);
+      }
     }
-    return FLKR.el;
+    QUOTES.forEach(paintQuote);
+    clearInterval(FK.timer);
+    FK.timer = setInterval(pollQuotes, 60000);
+    pollQuotes();
+    if (!FK.hooked) {
+      FK.hooked = true;
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) pollQuotes(); });
+    }
+    return FK.row;
   }
 
   function draw() {
@@ -1103,7 +1128,7 @@
     const ld = lastDayCard(d);
     if (ld) body.prepend(ld);
     if (!PUBLIC) body.prepend(liveBar());
-    body.prepend(flkrBox());
+    body.prepend(quotesRow());
     body.append(h("p", { class: "sub", text: "Limits: Alpaca's free feed leaves out the newest 15 minutes and some thin stocks; headlines come from one feed (Benzinga) and miss small-company filings, trading halts and social media; a split-adjusted history cannot see every spin-off. A headline near a move is a lead, not proof of the reason. This page is a record, not a recommendation." }));
     startLive();
   }

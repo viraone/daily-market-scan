@@ -890,7 +890,7 @@
       h("div", { class: "fk-foot" },
         k ? h("span", { class: "fk-chip" }, h("i", { class: "fk-dot" + (k.open ? " on" : "") }), "Seoul market " + (k.open ? "open" : "closed")) : null,
         h("span", { text: "Updated " + flkrWhen(d.builtAt) }),
-        h("span", { text: d.delayMinutes === 0 && d.last && d.last.src === "live" ? "Real-time trades from the IEX exchange · refreshes every minute" : "Trades " + (d.delayMinutes || 15) + " min behind · refreshes every minute" }),
+        h("span", { text: d.delayMinutes === 0 && d.last && d.last.src === "live" ? "Real-time trades from the IEX exchange · refreshes every " + (d.refreshSec ? d.refreshSec + " seconds" : "minute") : "Trades " + (d.delayMinutes || 15) + " min behind · refreshes every minute" }),
         stale ? h("span", { class: "fk-chip warn", text: "Updater may be off: the newest update is over 20 minutes old" }) : null,
         q.failed ? h("span", { class: "fk-chip warn", text: "Last refresh failed; showing the previous numbers" }) : null),
       h("p", { class: "fk-fine", text: k ? "Seoul trades 9:00 AM to 3:30 PM Seoul time, which is " + k.openStr + " to " + k.closeStr + " Seattle time. The fund holds South Korean stocks, so its overnight price tends to follow how they trade there. Korean holidays are not accounted for. A record of prices, not advice."
@@ -1030,12 +1030,41 @@
     q.el.replaceChildren(head, h("div", { class: "fk-body" + (side ? "" : " solo") }, main, side), flkrExtended(d), flkrFoot(q, d));
     if (chart) chart.redraw();
   }
+  /* ---- Real-time overlay. LIVE_URL is the Cloudflare Worker in worker/ (it holds the Alpaca key; the page never sees it).
+     Every 10 seconds it gives each stock's newest IEX trade; when that is newer than the published file's last trade, it replaces
+     the last price and widens the day's range and the chart. Empty LIVE_URL: the page uses only the published files. ---- */
+  const LIVE_URL = "https://daily-scan-live.viraone.workers.dev";
+  function applyLive(q) {
+    const d = q.data, t = q.live;
+    if (!d || !t || !(flkrN(t.p) != null) || isNaN(Date.parse(t.t))) return;
+    if (d.last && Date.parse(t.t) <= Date.parse(d.last.time)) return;
+    const when = Math.floor(Date.parse(t.t) / 1000), flag = t.session === "Market open" ? 0 : 1;
+    d.last = { price: t.p, time: t.t, size: t.s, src: "live", session: t.session };
+    d.delayMinutes = 0;
+    d.refreshSec = 10;
+    if (d.close) { const amount = Math.round((t.p - d.close.price) * 100) / 100; d.change = { amount, percent: Math.round(amount / d.close.price * 10000) / 100 }; }
+    for (const key of ["d1", "d5"]) {
+      const c = d.chart && d.chart[key];
+      if (c && c.points.length && when > c.points[c.points.length - 1][0]) c.points.push([when, Math.round(t.p * 10000) / 10000, flag]);
+    }
+    if (d.day && d.day.partial && t.session === "Market open") { d.day.high = Math.max(d.day.high, t.p); d.day.low = Math.min(d.day.low, t.p); d.day.close = t.p; }
+  }
+  async function pollLive() {
+    if (!LIVE_URL || document.hidden) return;
+    try {
+      const r = await fetch(LIVE_URL + "/?symbols=" + QUOTES.map(q => q.sym).join(","), { cache: "no-store" });
+      if (!r.ok) throw new Error("status " + r.status);
+      const trades = (await r.json()).trades || {};
+      for (const q of QUOTES) { q.live = trades[q.sym] || null; applyLive(q); paintQuote(q); }
+    } catch (err) { /* keep what is on the card; the published file still refreshes every minute */ }
+  }
   async function pollQuote(q) {
     try {
       const r = await fetch(QUOTE_BASE + q.file + "?t=" + Date.now(), { cache: "no-store" });
       if (!r.ok) throw new Error("status " + r.status);
       q.data = await r.json();
       q.failed = false;
+      applyLive(q);
     } catch (err) { q.failed = true; }
     paintQuote(q);
   }
@@ -1063,7 +1092,10 @@
     QUOTES.forEach(paintQuote);
     clearInterval(FK.timer);
     FK.timer = setInterval(pollQuotes, 60000);
+    clearInterval(FK.liveTimer);
+    if (LIVE_URL) FK.liveTimer = setInterval(pollLive, 10000);
     pollQuotes();
+    pollLive();
     if (!FK.hooked) {
       FK.hooked = true;
       document.addEventListener("visibilitychange", () => { if (!document.hidden) pollQuotes(); });

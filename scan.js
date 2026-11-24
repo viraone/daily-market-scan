@@ -890,7 +890,7 @@
       h("div", { class: "fk-foot" },
         k ? h("span", { class: "fk-chip" }, h("i", { class: "fk-dot" + (k.open ? " on" : "") }), "Seoul market " + (k.open ? "open" : "closed")) : null,
         h("span", { text: "Updated " + flkrWhen(d.builtAt) }),
-        h("span", { text: "Trades " + (d.delayMinutes || 15) + " min behind · refreshes every minute" }),
+        h("span", { text: d.delayMinutes === 0 && d.last && d.last.src === "live" ? "Real-time trades from the IEX exchange · refreshes every minute" : "Trades " + (d.delayMinutes || 15) + " min behind · refreshes every minute" }),
         stale ? h("span", { class: "fk-chip warn", text: "Updater may be off: the newest update is over 20 minutes old" }) : null,
         q.failed ? h("span", { class: "fk-chip warn", text: "Last refresh failed; showing the previous numbers" }) : null),
       h("p", { class: "fk-fine", text: k ? "Seoul trades 9:00 AM to 3:30 PM Seoul time, which is " + k.openStr + " to " + k.closeStr + " Seattle time. The fund holds South Korean stocks, so its overnight price tends to follow how they trade there. Korean holidays are not accounted for. A record of prices, not advice."
@@ -1020,7 +1020,7 @@
       h("span", { class: "fk-state " + state }, h("i", { class: "fk-dot" }), String(d.session || "")));
     const main = h("div", { class: "fk-main" },
       h("div", { class: "fk-hero" }, h("div", { class: "fk-price", text: px(price) }), ratio == null ? null : h("span", { class: "fk-chg " + cls, text: chipText }), useEst ? h("span", { class: "fk-est", title: "Estimated from " + est.symbol + "'s trades, not a " + q.sym + " trade", text: "Estimate" }) : null),
-      h("p", { class: "fk-sub", text: useEst ? "Estimated from " + est.symbol + "'s latest " + String(est.session || "").toLowerCase() + " trade · " + flkrWhen(est.time) : night ? "Overnight · indicative midpoint of the live bid and ask" : (d.last ? d.last.session + " · last trade " + flkrWhen(d.last.time) : "No trade yet") }),
+      h("p", { class: "fk-sub", text: useEst ? "Estimated from " + est.symbol + "'s latest " + String(est.session || "").toLowerCase() + " trade · " + flkrWhen(est.time) : night ? "Overnight · indicative midpoint of the live bid and ask" : (d.last ? d.last.session + " · last trade " + flkrWhen(d.last.time) + (d.last.src === "live" ? " (IEX, real time)" : "") : "No trade yet") }),
       close != null ? h("p", { class: "fk-sub fk-muted", text: "Change is from the regular close of " + px(close) + (d.close.date ? ", " + dayLabel(d.close.date) : "") }) : null);
     const nightBox = useEst ? flkrEstimate(d, est, d.overnight) : (night ? flkrNight(night) : null);
     if (nightBox) main.append(nightBox);
